@@ -28,6 +28,16 @@ class DocumentText(Base):
         nullable=False,
     )
 
+    sanitized_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    privacy_metadata: Mapped[dict | None] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=True,
+    )
+
     page_count: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,

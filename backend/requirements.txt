@@ -42,4 +42,9 @@ tomli==2.4.1
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 tzdata==2026.3
+presidio-analyzer==2.2.358
+presidio-anonymizer==2.2.358
+spacy==3.8.4
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 uvicorn==0.52.4
+gliner>=0.2.7

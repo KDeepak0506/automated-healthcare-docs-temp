@@ -737,11 +737,13 @@
   border: 1px solid var(--hp-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xs);
-  overflow: hidden;
+  overflow-x: auto;
+  width: 100%;
 }
 
 .hp-doc-table {
   width: 100%;
+  min-width: 880px;
   border-collapse: collapse;
   text-align: left;
 }
@@ -755,6 +757,7 @@
   letter-spacing: 0.06em;
   padding: var(--space-4) var(--space-6);
   border-bottom: 1px solid var(--hp-border);
+  white-space: nowrap;
 }
 
 .hp-doc-table td {
@@ -763,6 +766,7 @@
   font-size: var(--text-base);
   color: var(--hp-text-900);
   vertical-align: middle;
+  white-space: nowrap;
 }
 
 .hp-doc-table tr:last-child td {
@@ -949,10 +953,5 @@
   
   .hp-main-content {
     padding: var(--space-5);
-  }
-  
-  .hp-doc-table th:nth-child(2),
-  .hp-doc-table td:nth-child(2) {
-    display: none;
   }
 }

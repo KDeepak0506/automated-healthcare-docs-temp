@@ -29,6 +29,21 @@ export default function UploadPage() {
 
       <div className="hp-card" style={{ marginTop: 24 }}>
         <h3 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--hp-text-900)", marginBottom: 12 }}>
+          Automated Intake &amp; Security Pipeline
+        </h3>
+        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+          <span className="hp-status-badge hp-status-completed">✓ M1 Ingestion</span>
+          <span style={{ color: "var(--hp-text-400)" }}>→</span>
+          <span className="hp-status-badge hp-status-completed">✓ M2 OCR &amp; Layout</span>
+          <span style={{ color: "var(--hp-text-400)" }}>→</span>
+          <span className="hp-status-badge hp-status-completed">✓ Privacy Protection</span>
+          <span style={{ color: "var(--hp-text-400)" }}>→</span>
+          <span className="hp-status-badge hp-status-completed">✓ Sanitized OCR (AI Ready)</span>
+        </div>
+      </div>
+
+      <div className="hp-card" style={{ marginTop: 24 }}>
+        <h3 style={{ fontSize: "1rem", fontWeight: 600, color: "var(--hp-text-900)", marginBottom: 12 }}>
           Document Intake Guidelines
         </h3>
         <ul style={{ margin: 0, paddingLeft: 20, color: "var(--hp-text-700)", fontSize: "0.875rem", lineHeight: 1.7 }}>

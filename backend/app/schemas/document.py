@@ -20,4 +20,5 @@ class DocumentResponse(BaseModel):
     file_url: str
     document_type: str | None
     processing_status: DocumentProcessingStatus
+    privacy_status: str = "pending"
     uploaded_at: datetime

@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useState } from "react";
+import ClinicalEntitiesModal from "./ClinicalEntitiesModal";
 
 const STATUS_CLASS = {
   Pending: "hp-status-pending",
@@ -8,6 +9,8 @@ const STATUS_CLASS = {
 };
 
 export default function DocumentList({ documents, loading, newestId }) {
+  const [selectedDocForEntities, setSelectedDocForEntities] = useState(null);
+
   if (loading) {
     return (
       <div className="hp-table-container">
@@ -56,57 +59,131 @@ export default function DocumentList({ documents, loading, newestId }) {
   };
 
   return (
-    <div className="hp-table-container">
-      <table className="hp-doc-table">
-        <thead>
-          <tr>
-            <th>Document Name</th>
-            <th>Type</th>
-            <th>Uploaded</th>
-            <th>Processing Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {documents.map((doc) => {
-            const isNew = doc.document_id === newestId;
-            const statusClass = STATUS_CLASS[doc.processing_status] || "hp-status-pending";
-            
-            return (
-              <tr key={doc.document_id} style={isNew ? { background: "var(--hp-primary-50)" } : undefined}>
-                <td>
-                  <div className="hp-file-cell">
-                    <div className="hp-doc-type-icon">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                      </svg>
+    <>
+      <div className="hp-table-container">
+        <table className="hp-doc-table">
+          <thead>
+            <tr>
+              <th>Document Name</th>
+              <th>Type</th>
+              <th>Uploaded</th>
+              <th>OCR Status</th>
+              <th>Privacy Status</th>
+              <th>AI Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {documents.map((doc) => {
+              const isNew = doc.document_id === newestId;
+              const statusClass = STATUS_CLASS[doc.processing_status] || "hp-status-pending";
+
+              const privacyStatus = doc.privacy_status || "pending";
+              let privacyBadgeClass = "hp-status-pending";
+              let privacyLabel = "Pending";
+              let aiBadgeClass = "hp-status-pending";
+              let aiLabel = "Pending Privacy";
+
+              if (privacyStatus === "completed") {
+                privacyBadgeClass = "hp-status-completed";
+                privacyLabel = "Protected";
+                aiBadgeClass = "hp-status-completed";
+                aiLabel = "AI Ready";
+              } else if (privacyStatus === "processing") {
+                privacyBadgeClass = "hp-status-processing";
+                privacyLabel = "Processing...";
+                aiBadgeClass = "hp-status-pending";
+                aiLabel = "Pending Privacy";
+              } else if (privacyStatus === "failed") {
+                privacyBadgeClass = "hp-status-failed";
+                privacyLabel = "Failed";
+                aiBadgeClass = "hp-status-failed";
+                aiLabel = "AI Blocked";
+              }
+
+              return (
+                <tr key={doc.document_id} style={isNew ? { background: "var(--hp-primary-50)" } : undefined}>
+                  <td>
+                    <div className="hp-file-cell">
+                      <div className="hp-doc-type-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                          <polyline points="14 2 14 8 20 8"></polyline>
+                        </svg>
+                      </div>
+                      <span className="hp-filename-text" title={doc.file_name || doc.document_id}>
+                        {doc.file_name || doc.document_id}
+                      </span>
                     </div>
-                    <span className="hp-filename-text" title={doc.file_name || doc.document_id}>
-                      {doc.file_name || doc.document_id}
+                  </td>
+                  <td>
+                    <span style={{ fontSize: "0.8125rem", color: "var(--hp-text-700)" }}>
+                      {doc.document_type || "General Medical"}
                     </span>
-                  </div>
-                </td>
-                <td>
-                  <span style={{ fontSize: "0.8125rem", color: "var(--hp-text-700)" }}>
-                    {doc.document_type || "General Medical"}
-                  </span>
-                </td>
-                <td>
-                  <span style={{ fontSize: "0.8125rem", color: "var(--hp-text-500)" }}>
-                    {formatDate(doc.uploaded_at)}
-                  </span>
-                </td>
-                <td>
-                  <span className={`hp-status-badge ${statusClass}`}>
-                    <span className="hp-status-dot" />
-                    <span>{doc.processing_status || "Pending"}</span>
-                  </span>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                  </td>
+                  <td>
+                    <span style={{ fontSize: "0.8125rem", color: "var(--hp-text-500)" }}>
+                      {formatDate(doc.uploaded_at)}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`hp-status-badge ${statusClass}`}>
+                      <span className="hp-status-dot" />
+                      <span>{doc.processing_status || "Pending"}</span>
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`hp-status-badge ${privacyBadgeClass}`}>
+                      <span className="hp-status-dot" />
+                      <span>{privacyLabel}</span>
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`hp-status-badge ${aiBadgeClass}`}>
+                      <span>{aiLabel}</span>
+                    </span>
+                  </td>
+                  <td>
+                    {privacyStatus === "completed" ? (
+                      <button
+                        onClick={() => setSelectedDocForEntities(doc)}
+                        style={{
+                          background: "var(--hp-primary-50, #f0f9ff)",
+                          color: "var(--hp-primary, #0284c7)",
+                          border: "1px solid var(--hp-primary-200, #bae6fd)",
+                          padding: "4px 10px",
+                          borderRadius: "6px",
+                          fontSize: "0.75rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "4px",
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="11" cy="11" r="8"></circle>
+                          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        Entities
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {selectedDocForEntities && (
+        <ClinicalEntitiesModal
+          document={selectedDocForEntities}
+          onClose={() => setSelectedDocForEntities(null)}
+        />
+      )}
+    </>
   );
 }

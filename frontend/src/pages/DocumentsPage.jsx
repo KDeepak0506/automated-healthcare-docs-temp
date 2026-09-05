@@ -91,6 +91,11 @@ export default function DocumentsPage() {
         documents={documents}
         loading={loading}
         newestId={newestId}
+        onDocumentUpdated={(updatedDoc) => {
+          setDocuments((prev) =>
+            prev.map((d) => (d.document_id === updatedDoc.document_id ? { ...d, ...updatedDoc } : d))
+          );
+        }}
       />
 
       <Toast

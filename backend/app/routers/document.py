@@ -6,12 +6,15 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import get_current_user
 from app.db.session import get_db
 from app.models.user import User
+from app.schemas.classification import ClassificationResponse
 from app.schemas.document import (
     DocumentProcessingStatus,
     DocumentResponse,
 )
-from app.schemas.ocr import DocumentTextResponse
 from app.schemas.entity import DocumentEntitiesResponse
+from app.schemas.ocr import DocumentTextResponse
+from app.schemas.summary import SummaryResponse
+from app.services.classification_service import classification_service
 from app.services.document_service import (
     get_all_documents,
     get_document_by_id,
@@ -20,6 +23,7 @@ from app.services.document_service import (
     update_document_status,
     upload_document,
 )
+from app.services.summary_service import summary_service
 
 
 router = APIRouter(
@@ -165,3 +169,51 @@ def get_document_clinical_entities(
         "entities": entities,
         "total_count": len(entities),
     }
+
+
+@router.post(
+    "/{document_id}/classify",
+    response_model=ClassificationResponse,
+)
+def classify_document_endpoint(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Classify healthcare document type using LLM strictly from sanitized OCR text."""
+    document = get_document_by_id(db=db, document_id=document_id)
+
+    if document.uploaded_by != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    return classification_service.classify_document(
+        db=db,
+        document=document,
+    )
+
+
+@router.post(
+    "/{document_id}/summarize",
+    response_model=SummaryResponse,
+)
+def summarize_document_endpoint(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generate factual clinical summary and key findings using LLM strictly from sanitized OCR text."""
+    document = get_document_by_id(db=db, document_id=document_id)
+
+    if document.uploaded_by != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    return summary_service.summarize_document(
+        db=db,
+        document=document,
+    )

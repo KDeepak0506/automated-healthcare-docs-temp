@@ -36,3 +36,14 @@ export async function getDocumentEntities(documentId) {
   const { data } = await client.get(`/documents/${documentId}/entities`);
   return data; // { document_id, entities: [...], total_count }
 }
+
+export async function classifyDocument(documentId) {
+  const { data } = await client.post(`/documents/${documentId}/classify`);
+  return data; // { document_id, document_type, classification_confidence, cached, truncated }
+}
+
+export async function summarizeDocument(documentId) {
+  const { data } = await client.post(`/documents/${documentId}/summarize`);
+  return data; // { document_id, summary, key_findings, cached, truncated }
+}
+

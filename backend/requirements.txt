@@ -48,3 +48,5 @@ spacy==3.8.4
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 uvicorn==0.52.4
 gliner>=0.2.7
+
+groq==1.7.0

@@ -8,7 +8,7 @@ const STATUS_CLASS = {
   Failed: "hp-status-failed",
 };
 
-export default function DocumentList({ documents, loading, newestId }) {
+export default function DocumentList({ documents, loading, newestId, onDocumentUpdated }) {
   const [selectedDocForEntities, setSelectedDocForEntities] = useState(null);
 
   if (loading) {
@@ -117,9 +117,16 @@ export default function DocumentList({ documents, loading, newestId }) {
                     </div>
                   </td>
                   <td>
-                    <span style={{ fontSize: "0.8125rem", color: "var(--hp-text-700)" }}>
-                      {doc.document_type || "General Medical"}
-                    </span>
+                    <div>
+                      <span style={{ fontSize: "0.8125rem", fontWeight: 600, color: "var(--hp-text-700)" }}>
+                        {doc.document_type || "General Medical"}
+                      </span>
+                      {doc.classification_confidence != null && (
+                        <span style={{ fontSize: "0.75rem", color: "var(--hp-text-500)", marginLeft: "4px" }}>
+                          ({(doc.classification_confidence * 100).toFixed(0)}%)
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td>
                     <span style={{ fontSize: "0.8125rem", color: "var(--hp-text-500)" }}>
@@ -165,7 +172,7 @@ export default function DocumentList({ documents, loading, newestId }) {
                           <circle cx="11" cy="11" r="8"></circle>
                           <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                         </svg>
-                        Entities
+                        Intelligence
                       </button>
                     ) : (
                       <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>—</span>
@@ -182,6 +189,7 @@ export default function DocumentList({ documents, loading, newestId }) {
         <ClinicalEntitiesModal
           document={selectedDocForEntities}
           onClose={() => setSelectedDocForEntities(null)}
+          onDocumentUpdated={onDocumentUpdated}
         />
       )}
     </>

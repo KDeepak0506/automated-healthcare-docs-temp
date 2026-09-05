@@ -1,5 +1,5 @@
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from enum import Enum
 from datetime import datetime
 
@@ -12,13 +12,18 @@ class DocumentProcessingStatus(str, Enum):
 
 
 class DocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     document_id: UUID
     patient_id: UUID | None
     uploaded_by: UUID
     file_name: str
     file_type: str
     file_url: str
-    document_type: str | None
+    document_type: str | None = None
+    classification_confidence: float | None = None
+    summary: str | None = None
+    key_findings: list[str] | None = None
     processing_status: DocumentProcessingStatus
     privacy_status: str = "pending"
     uploaded_at: datetime

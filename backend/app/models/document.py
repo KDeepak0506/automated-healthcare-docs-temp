@@ -1,8 +1,10 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Numeric, func
+from sqlalchemy import DateTime, Float, ForeignKey, Numeric, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import JSON
 
 from app.db.base import Base
 
@@ -41,6 +43,21 @@ class Document(Base):
 
     document_type: Mapped[str | None] = mapped_column(
         String,
+        nullable=True,
+    )
+
+    classification_confidence: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    summary: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    key_findings: Mapped[list[str] | None] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
         nullable=True,
     )
 

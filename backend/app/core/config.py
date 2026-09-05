@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24 hours
 
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_timeout_seconds: float = 15.0
+    max_sanitized_text_chars: int = 50000
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

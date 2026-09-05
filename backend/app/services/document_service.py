@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.document import Document
 from app.models.document_text import DocumentText
+from app.models.document_entity import DocumentEntity
 from app.schemas.document import DocumentProcessingStatus
 from app.services.ocr_service import OCRResult, extract_text
+from app.services.privacy_service import privacy_service
+from app.services.ner_service import clinical_ner_service
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +31,30 @@ def _run_ocr_and_store(
     file_path: Path,
     file_type: str,
 ) -> None:
-    """Internal background task to run OCR and store results using a dedicated DB session."""
+    """Internal background task to run OCR, Privacy, and M4 Clinical NER using a dedicated DB session."""
     db = SessionLocal()
     try:
         ocr_result = extract_text(file_path, file_type)
-        store_ocr_result(db, document_id, ocr_result)
+        doc_text = store_ocr_result(db, document_id, ocr_result)
+
+        # M4 Clinical NER Orchestration
+        # Check that privacy_status == "completed" and sanitized_text is present before running M4
+        document = db.query(Document).filter(Document.document_id == document_id).first()
+        if document and document.privacy_status == "completed" and doc_text.sanitized_text:
+            logger.info(f"Triggering M4 Clinical NER for document {document_id}")
+            clinical_ner_service.extract_and_store_entities(
+                db=db,
+                document_id=document_id,
+                sanitized_text=doc_text.sanitized_text,
+            )
+        else:
+            status_str = document.privacy_status if document else "None"
+            logger.warning(
+                f"Skipping M4 Clinical NER for document {document_id}: "
+                f"privacy_status='{status_str}'"
+            )
     except Exception as exc:
-        logger.error(f"Background OCR failed for document {document_id}: {exc}")
+        logger.error(f"Background processing failed for document {document_id}: {exc}")
         try:
             db.rollback()
             _mark_document_failed(db, document_id)
@@ -124,6 +144,7 @@ def _mark_document_failed(
     )
     if document is not None:
         document.processing_status = DocumentProcessingStatus.FAILED.value
+        document.privacy_status = "failed"
         db.commit()
 
 
@@ -229,14 +250,33 @@ def store_ocr_result(
         doc_text.ocr_engine = ocr_result.ocr_engine
         doc_text.processing_time_ms = ocr_result.processing_time_ms
 
-    document.processing_status = DocumentProcessingStatus.COMPLETED.value
-    document.processed_at = datetime.now(timezone.utc)
-
     # Explicit branch for native vs OCR confidence score
     if ocr_result.ocr_engine == "pymupdf-native":
         document.ocr_quality_score = 1.0
     else:
         document.ocr_quality_score = ocr_result.confidence
+
+    # Run Privacy / De-identification Layer
+    document.privacy_status = "processing"
+    try:
+        sanitization_result = privacy_service.sanitize(ocr_result.raw_text)
+        doc_text.sanitized_text = sanitization_result.sanitized_text
+        doc_text.privacy_metadata = {
+            "entities_detected": sanitization_result.entities_detected,
+            "entity_counts": sanitization_result.entity_counts,
+        }
+        document.privacy_status = "completed"
+        document.processing_status = DocumentProcessingStatus.COMPLETED.value
+        document.processed_at = datetime.now(timezone.utc)
+        logger.info(
+            f"Privacy processing completed for document {document_id}: "
+            f"entities_detected={sanitization_result.entities_detected}"
+        )
+    except Exception as exc:
+        logger.error(f"Privacy processing failed for document {document_id}: {exc}")
+        doc_text.sanitized_text = None
+        document.privacy_status = "failed"
+        document.processing_status = DocumentProcessingStatus.FAILED.value
 
     db.commit()
     db.refresh(doc_text)
@@ -262,3 +302,17 @@ def get_document_text(
         )
 
     return doc_text
+
+
+def get_document_entities(
+    db: Session,
+    document_id: UUID,
+) -> list[DocumentEntity]:
+    # Ensure document exists
+    get_document_by_id(db, document_id)
+    return (
+        db.query(DocumentEntity)
+        .filter(DocumentEntity.document_id == document_id)
+        .order_by(DocumentEntity.confidence.desc())
+        .all()
+    )

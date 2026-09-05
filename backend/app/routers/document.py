@@ -11,9 +11,11 @@ from app.schemas.document import (
     DocumentResponse,
 )
 from app.schemas.ocr import DocumentTextResponse
+from app.schemas.entity import DocumentEntitiesResponse
 from app.services.document_service import (
     get_all_documents,
     get_document_by_id,
+    get_document_entities,
     get_document_text,
     update_document_status,
     upload_document,
@@ -106,3 +108,60 @@ def get_document_ocr_text(
         )
 
     return get_document_text(db=db, document_id=document_id)
+
+
+@router.get(
+    "/{document_id}/sanitized-text",
+)
+def get_sanitized_document_text(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return the sanitized OCR text ready for downstream AI analysis."""
+    document = get_document_by_id(db=db, document_id=document_id)
+
+    if document.uploaded_by != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    if document.privacy_status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sanitized text unavailable. Privacy processing has not completed or failed.",
+        )
+
+    doc_text = get_document_text(db=db, document_id=document_id)
+    return {
+        "document_id": document_id,
+        "privacy_status": document.privacy_status,
+        "sanitized_text": doc_text.sanitized_text,
+    }
+
+
+@router.get(
+    "/{document_id}/entities",
+    response_model=DocumentEntitiesResponse,
+)
+def get_document_clinical_entities(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return clinical entities extracted via M4 Biomedical NER from sanitized text."""
+    document = get_document_by_id(db=db, document_id=document_id)
+
+    if document.uploaded_by != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    entities = get_document_entities(db=db, document_id=document_id)
+    return {
+        "document_id": document_id,
+        "entities": entities,
+        "total_count": len(entities),
+    }

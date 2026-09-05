@@ -18,8 +18,21 @@ export async function listDocuments() {
   return data; // DocumentResponse[]
 }
 
-// No dedicated /status endpoint yet — reuse GET /{id} and read .processing_status.
 export async function getDocumentStatus(documentId) {
   const { data } = await client.get(`/documents/${documentId}`);
-  return { document_id: data.document_id, status: data.processing_status };
+  return {
+    document_id: data.document_id,
+    status: data.processing_status,
+    privacy_status: data.privacy_status,
+  };
+}
+
+export async function getDocumentSanitizedText(documentId) {
+  const { data } = await client.get(`/documents/${documentId}/sanitized-text`);
+  return data; // { document_id, privacy_status, sanitized_text }
+}
+
+export async function getDocumentEntities(documentId) {
+  const { data } = await client.get(`/documents/${documentId}/entities`);
+  return data; // { document_id, entities: [...], total_count }
 }

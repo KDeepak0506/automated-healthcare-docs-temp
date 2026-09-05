@@ -50,6 +50,12 @@ class Document(Base):
         default="Pending",
     )
 
+    privacy_status: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+        default="pending",
+    )
+
     ocr_quality_score: Mapped[float | None] = mapped_column(
         Numeric,
         nullable=True,
@@ -75,4 +81,10 @@ class Document(Base):
         "DocumentText",
         back_populates="document",
         uselist=False,
-    )
+    )
+
+    entities: Mapped[list["DocumentEntity"]] = relationship(  # noqa: F821
+        "DocumentEntity",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )

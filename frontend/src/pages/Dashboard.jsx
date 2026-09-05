@@ -30,10 +30,11 @@ export default function Dashboard() {
     fetchDocuments();
   }, [fetchDocuments]);
 
-  // Poll status for any document still Pending/Processing
+  // Poll status for any document still Pending/Processing or privacy pending/processing
   useEffect(() => {
     const activeDocs = documents.filter((d) =>
-      ACTIVE_STATUSES.includes(d.processing_status)
+      ACTIVE_STATUSES.includes(d.processing_status) ||
+      (d.privacy_status && ["pending", "processing"].includes(d.privacy_status))
     );
 
     if (activeDocs.length === 0) {
@@ -49,7 +50,13 @@ export default function Dashboard() {
         setDocuments((prev) =>
           prev.map((doc) => {
             const update = updates.find((u) => u && u.document_id === doc.document_id);
-            return update ? { ...doc, processing_status: update.status } : doc;
+            return update
+              ? {
+                  ...doc,
+                  processing_status: update.status,
+                  privacy_status: update.privacy_status,
+                }
+              : doc;
           })
         );
       } catch {
@@ -58,7 +65,7 @@ export default function Dashboard() {
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(pollRef.current);
-  }, [documents.map((d) => d.processing_status).join(",")]);
+  }, [documents.map((d) => `${d.processing_status}-${d.privacy_status}`).join(",")]);
 
   // Calculate statistics from actual document state
   const totalCount = documents.length;

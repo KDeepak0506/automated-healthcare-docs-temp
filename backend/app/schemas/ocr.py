@@ -10,6 +10,8 @@ class DocumentTextResponse(BaseModel):
     id: UUID
     document_id: UUID
     raw_text: str
+    sanitized_text: str | None = None
+    privacy_metadata: dict | None = None
     page_count: int | None = None
     confidence: float | None = None
     layout: dict | None = None

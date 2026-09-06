@@ -105,3 +105,9 @@ class Document(Base):
         back_populates="document",
         cascade="all, delete-orphan",
     )
+
+    chunks: Mapped[list["DocumentChunk"]] = relationship(  # noqa: F821
+        "DocumentChunk",
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )

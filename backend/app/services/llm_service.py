@@ -56,40 +56,36 @@ class LLMService:
             timeout=settings.groq_timeout_seconds,
         )
 
-    def generate_structured(
+    def _execute_completion(
         self,
-        prompt: str,
-        response_schema: type[T],
-        system_prompt: str | None = None,
-    ) -> T:
+        messages: list[dict[str, str]],
+        response_format: dict[str, str] | None = None,
+        temperature: float = 0.1,
+    ) -> str:
         """
-        Generate structured JSON output validated against a Pydantic schema.
-        Only sanitized text must be provided in prompts.
+        Internal completion executor handling client initialization,
+        reasoning effort configuration, timeouts, and exception wrapping.
         """
         client = self._get_client()
 
-        messages: list[dict[str, str]] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
         logger.info(
-            f"Dispatching structured completion to Groq model={settings.groq_model} "
+            f"Dispatching completion to Groq model={settings.groq_model} "
             f"timeout={settings.groq_timeout_seconds}s"
         )
 
-        completion_kwargs: dict = {
+        completion_kwargs: dict[str, Any] = {
             "model": settings.groq_model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
-            "temperature": 0.1,
+            "temperature": temperature,
         }
+
+        if response_format:
+            completion_kwargs["response_format"] = response_format
 
         # gpt-oss models support reasoning_effort to cap hidden chain-of-thought
         # token usage. Low effort keeps free-tier TPM consumption reasonable for
         # short structured-output tasks like classification/summarization,
         # which don't need deep multi-step reasoning.
-
         if "gpt-oss" in settings.groq_model:
             completion_kwargs["reasoning_effort"] = "low"
 
@@ -113,7 +109,49 @@ class LLMService:
             logger.error("Groq returned empty response choices or content")
             raise LLMResponseParsingError("Groq returned an empty response")
 
-        raw_content = choices[0].message.content.strip()
+        return choices[0].message.content.strip()
+
+    def generate_text(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.1,
+    ) -> str:
+        """
+        Generate free-form text response (e.g., for RAG Q&A).
+        Only sanitized text must be provided in prompts.
+        """
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        return self._execute_completion(
+            messages=messages,
+            response_format=None,
+            temperature=temperature,
+        )
+
+    def generate_structured(
+        self,
+        prompt: str,
+        response_schema: type[T],
+        system_prompt: str | None = None,
+    ) -> T:
+        """
+        Generate structured JSON output validated against a Pydantic schema.
+        Only sanitized text must be provided in prompts.
+        """
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        raw_content = self._execute_completion(
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
 
         try:
             parsed_json = json.loads(raw_content)
@@ -129,6 +167,7 @@ class LLMService:
 
         logger.info(f"Successfully validated structured response for {response_schema.__name__}")
         return validated_result
+
 
 
 # Singleton instance for shared usage

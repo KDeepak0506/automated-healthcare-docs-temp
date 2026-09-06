@@ -50,3 +50,5 @@ uvicorn==0.52.4
 gliner>=0.2.7
 
 groq==1.7.0
+sentence-transformers==6.0.1
+pgvector==0.5.0

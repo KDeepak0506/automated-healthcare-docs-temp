@@ -47,3 +47,16 @@ export async function summarizeDocument(documentId) {
   return data; // { document_id, summary, key_findings, cached, truncated }
 }
 
+export async function indexDocument(documentId) {
+  const { data } = await client.post(`/documents/${documentId}/index`);
+  return data; // { document_id, chunks_created, status }
+}
+
+export async function searchDocument(documentId, query, topK = 5) {
+  const { data } = await client.post(`/documents/${documentId}/search`, {
+    query,
+    top_k: topK,
+  });
+  return data; // { answer, sources }
+}
+

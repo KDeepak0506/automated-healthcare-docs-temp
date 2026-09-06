@@ -13,6 +13,7 @@ from app.schemas.document import (
 )
 from app.schemas.entity import DocumentEntitiesResponse
 from app.schemas.ocr import DocumentTextResponse
+from app.schemas.rag import IndexResponse, SearchRequest, SearchResponse
 from app.schemas.summary import SummaryResponse
 from app.services.classification_service import classification_service
 from app.services.document_service import (
@@ -23,7 +24,9 @@ from app.services.document_service import (
     update_document_status,
     upload_document,
 )
+from app.services.rag_service import rag_service
 from app.services.summary_service import summary_service
+
 
 
 router = APIRouter(
@@ -216,4 +219,56 @@ def summarize_document_endpoint(
     return summary_service.summarize_document(
         db=db,
         document=document,
-    )
+    )
+
+
+@router.post(
+    "/{document_id}/index",
+    response_model=IndexResponse,
+)
+def index_document_endpoint(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Index document text chunks and vector embeddings for semantic search."""
+    document = get_document_by_id(db=db, document_id=document_id)
+
+    if document.uploaded_by != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    return rag_service.index_document(
+        db=db,
+        document=document,
+    )
+
+
+@router.post(
+    "/{document_id}/search",
+    response_model=SearchResponse,
+)
+def search_document_endpoint(
+    document_id: UUID,
+    request: SearchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Perform grounded semantic search / RAG Q&A on a document."""
+    document = get_document_by_id(db=db, document_id=document_id)
+
+    if document.uploaded_by != current_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    return rag_service.search_document(
+        db=db,
+        document=document,
+        query=request.query,
+        top_k=request.top_k,
+    )
+

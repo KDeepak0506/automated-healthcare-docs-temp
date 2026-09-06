@@ -4,7 +4,10 @@ import {
   getDocumentSanitizedText,
   classifyDocument,
   summarizeDocument,
+  indexDocument,
+  searchDocument,
 } from "../api/documents";
+
 
 const LABEL_COLORS = {
   disease: { bg: "#fee2e2", text: "#991b1b", border: "#fca5a5" },
@@ -30,7 +33,17 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
   const [keyFindings, setKeyFindings] = useState(document?.key_findings || []);
   const [isClassifying, setIsClassifying] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
+
+  // M6 RAG states
+  const [ragQuery, setRagQuery] = useState("");
+  const [ragAnswer, setRagAnswer] = useState(null);
+  const [ragSources, setRagSources] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isIndexing, setIsIndexing] = useState(false);
+  const [indexStatus, setIndexStatus] = useState(null);
+
   const [activeTab, setActiveTab] = useState("overview");
+
 
   useEffect(() => {
     if (!document?.document_id) return;
@@ -100,6 +113,36 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
       setIsSummarizing(false);
     }
   };
+
+  const handleIndexDocument = async () => {
+    setIsIndexing(true);
+    setError(null);
+    try {
+      const res = await indexDocument(document.document_id);
+      setIndexStatus(res);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || "Failed to index document");
+    } finally {
+      setIsIndexing(false);
+    }
+  };
+
+  const handleSearch = async (e) => {
+    if (e) e.preventDefault();
+    if (!ragQuery.trim()) return;
+    setIsSearching(true);
+    setError(null);
+    try {
+      const res = await searchDocument(document.document_id, ragQuery.trim());
+      setRagAnswer(res.answer);
+      setRagSources(res.sources || []);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || "Failed to perform AI search");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
 
   if (!document) return null;
 
@@ -234,6 +277,21 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
             Clinical Entities (M4) ({entities.length})
           </button>
           <button
+            onClick={() => setActiveTab("rag")}
+            style={{
+              padding: "12px 16px",
+              border: "none",
+              background: "none",
+              borderBottom: activeTab === "rag" ? "2px solid var(--hp-primary, #0284c7)" : "2px solid transparent",
+              color: activeTab === "rag" ? "var(--hp-primary, #0284c7)" : "#64748b",
+              fontWeight: 600,
+              fontSize: "0.875rem",
+              cursor: "pointer",
+            }}
+          >
+            Ask AI / Search (M6)
+          </button>
+          <button
             onClick={() => setActiveTab("sanitized")}
             style={{
               padding: "12px 16px",
@@ -248,6 +306,7 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
           >
             Sanitized Source
           </button>
+
         </div>
 
         {/* Content */}
@@ -508,7 +567,224 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
                 </div>
               )}
             </div>
+          ) : activeTab === "rag" ? (
+            <div>
+              {/* Document Index Status Bar */}
+              <div
+                style={{
+                  background: "#f8fafc",
+                  borderRadius: "12px",
+                  padding: "16px 20px",
+                  marginBottom: "20px",
+                  border: "1px solid #e2e8f0",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div>
+                  <span style={{ fontSize: "0.75rem", textTransform: "uppercase", fontWeight: 700, color: "#64748b" }}>
+                    M6 Semantic Vector Index (pgvector)
+                  </span>
+                  <div style={{ marginTop: "4px", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "0.9375rem", fontWeight: 600, color: "#0f172a" }}>
+                      {indexStatus ? `Indexed (${indexStatus.chunks_created} chunks)` : "Ready for semantic search"}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: "0.75rem",
+                        padding: "2px 8px",
+                        borderRadius: "12px",
+                        background: "#f0fdf4",
+                        color: "#166534",
+                        fontWeight: 600,
+                      }}
+                    >
+                      384-dim Dense Embeddings
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleIndexDocument}
+                  disabled={isIndexing}
+                  style={{
+                    background: "#ffffff",
+                    color: "#0f172a",
+                    border: "1px solid #cbd5e1",
+                    padding: "8px 14px",
+                    borderRadius: "8px",
+                    fontSize: "0.8125rem",
+                    fontWeight: 600,
+                    cursor: isIndexing ? "not-allowed" : "pointer",
+                    opacity: isIndexing ? 0.7 : 1,
+                  }}
+                >
+                  {isIndexing ? "Indexing..." : "Re-Index Document"}
+                </button>
+              </div>
+
+              {/* Search Form */}
+              <form onSubmit={handleSearch} style={{ marginBottom: "20px" }}>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <input
+                    type="text"
+                    value={ragQuery}
+                    onChange={(e) => setRagQuery(e.target.value)}
+                    placeholder="Ask a question about this clinical document..."
+                    style={{
+                      flex: 1,
+                      padding: "10px 14px",
+                      borderRadius: "8px",
+                      border: "1px solid #cbd5e1",
+                      fontSize: "0.875rem",
+                      outline: "none",
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isSearching || !ragQuery.trim()}
+                    style={{
+                      background: "var(--hp-primary, #0284c7)",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "10px 20px",
+                      borderRadius: "8px",
+                      fontSize: "0.875rem",
+                      fontWeight: 600,
+                      cursor: isSearching || !ragQuery.trim() ? "not-allowed" : "pointer",
+                      opacity: isSearching || !ragQuery.trim() ? 0.6 : 1,
+                    }}
+                  >
+                    {isSearching ? "Searching..." : "Ask AI"}
+                  </button>
+                </div>
+
+                {/* Sample Question Chips */}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "10px" }}>
+                  <span style={{ fontSize: "0.75rem", color: "#64748b", alignSelf: "center" }}>Quick questions:</span>
+                  {[
+                    "What medications are prescribed?",
+                    "What are the abnormal laboratory results?",
+                    "What is the patient's diagnosis and vital signs?",
+                  ].map((sample, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setRagQuery(sample)}
+                      style={{
+                        background: "#f1f5f9",
+                        border: "1px solid #e2e8f0",
+                        padding: "4px 10px",
+                        borderRadius: "14px",
+                        fontSize: "0.75rem",
+                        color: "#334155",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {sample}
+                    </button>
+                  ))}
+                </div>
+              </form>
+
+              {/* Search Result */}
+              {isSearching ? (
+                <div style={{ textAlign: "center", padding: "30px 0" }}>
+                  <div
+                    className="hp-spinner"
+                    style={{
+                      width: 28,
+                      height: 28,
+                      margin: "0 auto 12px auto",
+                      borderTopColor: "var(--hp-primary, #0284c7)",
+                      borderColor: "#e2e8f0",
+                    }}
+                  />
+                  <p style={{ color: "#64748b", fontSize: "0.875rem" }}>
+                    Retrieving semantic context & synthesizing answer...
+                  </p>
+                </div>
+              ) : ragAnswer ? (
+                <div>
+                  {/* Grounded Answer Card */}
+                  <div
+                    style={{
+                      background: "#f8fafc",
+                      borderRadius: "12px",
+                      padding: "20px",
+                      border: "1px solid #e2e8f0",
+                      marginBottom: "20px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "10px" }}>
+                      <span
+                        style={{
+                          fontSize: "0.75rem",
+                          textTransform: "uppercase",
+                          fontWeight: 700,
+                          color: "var(--hp-primary, #0284c7)",
+                        }}
+                      >
+                        Grounded AI Answer
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: "0.9375rem", lineHeight: "1.6", color: "#0f172a", whiteSpace: "pre-wrap" }}>
+                      {ragAnswer}
+                    </p>
+                  </div>
+
+                  {/* Sources Section */}
+                  {ragSources && ragSources.length > 0 && (
+                    <div>
+                      <h4 style={{ margin: "0 0 10px 0", fontSize: "0.8125rem", textTransform: "uppercase", color: "#475569", fontWeight: 700 }}>
+                        Referenced Document Sources ({ragSources.length})
+                      </h4>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                        {ragSources.map((source, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              background: "#ffffff",
+                              borderRadius: "8px",
+                              border: "1px solid #e2e8f0",
+                              padding: "12px 16px",
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                              <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "#334155" }}>
+                                Chunk #{source.chunk_index} {source.page_number != null ? `(Page ${source.page_number})` : ""}
+                              </span>
+                              {source.similarity_score != null && (
+                                <span
+                                  style={{
+                                    fontSize: "0.7rem",
+                                    padding: "2px 6px",
+                                    borderRadius: "4px",
+                                    background: "#e0f2fe",
+                                    color: "#0369a1",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {(source.similarity_score * 100).toFixed(1)}% match
+                                </span>
+                              )}
+                            </div>
+                            {source.content_preview && (
+                              <p style={{ margin: 0, fontSize: "0.8125rem", color: "#64748b", lineHeight: "1.4" }}>
+                                {source.content_preview}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
           ) : (
+
             <div>
               {sanitizedText ? (
                 <div>

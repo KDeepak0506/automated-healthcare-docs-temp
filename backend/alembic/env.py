@@ -8,6 +8,8 @@ from app.db.base import Base
 from app.core.config import settings
 from app.models.document import Document
 from app.models.document_text import DocumentText
+from app.models.document_entity import DocumentEntity
+from app.models.document_chunk import DocumentChunk
 from app.models.user import User
 
 

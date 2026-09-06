@@ -78,13 +78,23 @@ class LLMService:
             f"timeout={settings.groq_timeout_seconds}s"
         )
 
+        completion_kwargs: dict = {
+            "model": settings.groq_model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+            "temperature": 0.1,
+        }
+
+        # gpt-oss models support reasoning_effort to cap hidden chain-of-thought
+        # token usage. Low effort keeps free-tier TPM consumption reasonable for
+        # short structured-output tasks like classification/summarization,
+        # which don't need deep multi-step reasoning.
+
+        if "gpt-oss" in settings.groq_model:
+            completion_kwargs["reasoning_effort"] = "low"
+
         try:
-            chat_completion = client.chat.completions.create(
-                model=settings.groq_model,
-                messages=messages,
-                response_format={"type": "json_object"},
-                temperature=0.1,
-            )
+            chat_completion = client.chat.completions.create(**completion_kwargs)
         except APITimeoutError as exc:
             logger.error(f"Groq API request timed out after {settings.groq_timeout_seconds}s")
             raise LLMTimeoutError("Groq request timed out") from exc

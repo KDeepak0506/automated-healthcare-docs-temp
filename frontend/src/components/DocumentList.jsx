@@ -8,7 +8,7 @@ const STATUS_CLASS = {
   Failed: "hp-status-failed",
 };
 
-export default function DocumentList({ documents, loading, newestId, onDocumentUpdated, onDelete }) {
+export default function DocumentList({ documents, loading, newestId, onDocumentUpdated, onDelete, compact = false }) {
   const [selectedDocForEntities, setSelectedDocForEntities] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
 
@@ -79,7 +79,7 @@ export default function DocumentList({ documents, loading, newestId, onDocumentU
               <th>Uploaded</th>
               <th>OCR Status</th>
               <th>Privacy Status</th>
-              <th>AI Status</th>
+              {!compact && <th>AI Status</th>}
               <th>Actions</th>
             </tr>
           </thead>
@@ -156,38 +156,42 @@ export default function DocumentList({ documents, loading, newestId, onDocumentU
                       <span>{privacyLabel}</span>
                     </span>
                   </td>
-                  <td>
-                    <span className={`hp-status-badge ${aiBadgeClass}`}>
-                      <span>{aiLabel}</span>
-                    </span>
-                  </td>
+                  {!compact && (
+                    <td>
+                      <span className={`hp-status-badge ${aiBadgeClass}`}>
+                        <span>{aiLabel}</span>
+                      </span>
+                    </td>
+                  )}
                   <td>
                     <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                      {privacyStatus === "completed" ? (
-                        <button
-                          onClick={() => setSelectedDocForEntities(doc)}
-                          style={{
-                            background: "var(--hp-primary-50, #f0f9ff)",
-                            color: "var(--hp-primary, #0284c7)",
-                            border: "1px solid var(--hp-primary-200, #bae6fd)",
-                            padding: "4px 10px",
-                            borderRadius: "6px",
-                            fontSize: "0.75rem",
-                            fontWeight: 600,
-                            cursor: "pointer",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "4px",
-                          }}
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <circle cx="11" cy="11" r="8"></circle>
-                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                          </svg>
-                          Intelligence
-                        </button>
-                      ) : (
-                        <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>—</span>
+                      {!compact && (
+                        privacyStatus === "completed" ? (
+                          <button
+                            onClick={() => setSelectedDocForEntities(doc)}
+                            style={{
+                              background: "var(--hp-primary-50, #f0f9ff)",
+                              color: "var(--hp-primary, #0D7377)",
+                              border: "1px solid var(--hp-primary-light, #E6F4F4)",
+                              padding: "4px 10px",
+                              borderRadius: "6px",
+                              fontSize: "0.75rem",
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                            }}
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <circle cx="11" cy="11" r="8"></circle>
+                              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            </svg>
+                            Intelligence
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>—</span>
+                        )
                       )}
 
                       <button

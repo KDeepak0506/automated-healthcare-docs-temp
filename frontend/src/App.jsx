@@ -7,6 +7,8 @@ import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import DocumentsPage from "./pages/DocumentsPage";
 import UploadPage from "./pages/UploadPage";
+import PatientsPage from "./pages/PatientsPage";
+import PatientWorkspacePage from "./pages/PatientWorkspacePage";
 
 function RootRedirect() {
   const { isAuthenticated } = useAuth();
@@ -21,7 +23,7 @@ export default function App() {
           <Route path="/" element={<RootRedirect />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          
+
           <Route
             path="/dashboard"
             element={
@@ -50,6 +52,28 @@ export default function App() {
               <ProtectedRoute>
                 <AppLayout>
                   <UploadPage />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/patients"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <PatientsPage />
+                </AppLayout>
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/patients/:patientId"
+            element={
+              <ProtectedRoute>
+                <AppLayout>
+                  <PatientWorkspacePage />
                 </AppLayout>
               </ProtectedRoute>
             }

@@ -18,8 +18,11 @@ class Document(Base):
     )
 
     patient_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("patients.patient_id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
     )
+
 
     uploaded_by: Mapped[UUID] = mapped_column(
         ForeignKey("users.user_id"),
@@ -94,6 +97,12 @@ class Document(Base):
         back_populates="documents",
     )
 
+    patient: Mapped["Patient | None"] = relationship(  # noqa: F821
+        "Patient",
+        back_populates="documents",
+    )
+
+
     text_record: Mapped["DocumentText | None"] = relationship(  # noqa: F821
         "DocumentText",
         back_populates="document",
@@ -110,4 +119,4 @@ class Document(Base):
         "DocumentChunk",
         back_populates="document",
         cascade="all, delete-orphan",
-    )
+    )

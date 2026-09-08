@@ -25,6 +25,29 @@
   --hp-primary-light: #E6F4F4;
   --hp-primary-50:    #F0F9F9;
 
+  /* Extended primary scale (used by patient-centered pages) */
+  --hp-primary-400:   #14A9AE;
+  --hp-primary-500:   #0D7377;  /* same as --hp-primary */
+  --hp-primary-600:   #0A5C5F;  /* same as --hp-primary-hover */
+  --hp-primary-700:   #083F42;
+
+  /* Background surface scale */
+  --hp-bg-100:        #FFFFFF;
+  --hp-bg-200:        #F8F9FA;  /* same as --hp-bg */
+  --hp-bg-300:        #F1F3F5;  /* same as --hp-surface-2 */
+
+  /* Text scale extensions */
+  --hp-text-100:      #1A1D21;  /* same as --hp-text-900 */
+  --hp-text-200:      #343A40;  /* same as --hp-text-700 */
+  --hp-text-300:      #495057;
+  --hp-text-600:      #ADB5BD;
+
+  /* Border alias */
+  --hp-border-100:    #E1E4E8;  /* same as --hp-border */
+
+  /* Semantic status aliases (for patient workspace) */
+  --hp-danger:        #C92A2A;  /* same as --hp-error */
+
   /* Status colors */
   --hp-success:       #2B8A3E;
   --hp-success-light: #EBFBEE;

@@ -153,6 +153,55 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Quick-access: Patients */}
+      <div
+        style={{
+          marginTop: 28,
+          background: "linear-gradient(135deg, var(--hp-primary-700)14 0%, var(--hp-bg-200) 100%)",
+          border: "1px solid var(--hp-primary-600)44",
+          borderRadius: 12,
+          padding: "16px 22px",
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+        }}
+      >
+        <div
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 10,
+            background: "linear-gradient(135deg, var(--hp-primary-700), var(--hp-primary-500))",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+          </svg>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: "0.9375rem", fontWeight: 700, color: "var(--hp-text-100)" }}>
+            Patient-Centered Workspace
+          </div>
+          <div style={{ fontSize: "0.8125rem", color: "var(--hp-text-400)", marginTop: 2 }}>
+            View patient records, upload clinical documents, and ask the AI assistant in a unified workspace.
+          </div>
+        </div>
+        <Link
+          to="/patients"
+          className="hp-btn-primary"
+          style={{ width: "auto", whiteSpace: "nowrap", flexShrink: 0 }}
+        >
+          Open Patients →
+        </Link>
+      </div>
+
       {/* Recent Documents Table Section */}
       <div className="hp-section-header" style={{ marginTop: 32 }}>
         <h2 className="hp-section-title">Recent Documents</h2>
@@ -164,6 +213,7 @@ export default function Dashboard() {
       <DocumentList
         documents={documents.slice(0, 5)}
         loading={loading}
+        compact
       />
 
       <Toast

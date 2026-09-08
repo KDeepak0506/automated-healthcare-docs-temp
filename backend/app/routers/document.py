@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status as http_status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status as http_status
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user
@@ -19,7 +19,6 @@ from app.schemas.summary import SummaryResponse
 from app.services.classification_service import classification_service
 from app.services.document_service import (
     delete_document,
-    get_all_documents,
     get_chunk_source,
     get_document_by_id,
     get_document_entities,
@@ -28,10 +27,9 @@ from app.services.document_service import (
     update_document_status,
     upload_document,
 )
+from app.services.patient_service import has_document_access, verify_patient_access
 from app.services.rag_service import rag_service
 from app.services.summary_service import summary_service
-
-
 
 router = APIRouter(
     prefix="/documents",
@@ -47,10 +45,13 @@ router = APIRouter(
 def upload_document_endpoint(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    patient_id: UUID | None = None,
+    patient_id: UUID | None = Form(default=None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if patient_id:
+        verify_patient_access(db=db, user=current_user, patient_id=patient_id)
+
     return upload_document(
         db=db,
         file=file,
@@ -60,7 +61,7 @@ def upload_document_endpoint(
     )
 
 
-# M7: Ownership-scoped listing with pagination, search, and filters
+# M7: Ownership and Patient-scoped listing with pagination, search, and filters
 @router.get(
     "",
     response_model=PaginatedDocumentResponse,
@@ -76,10 +77,10 @@ def get_all_documents_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """List documents owned by the authenticated user with pagination, search, and filters."""
+    """List documents accessible to the authenticated user with pagination, search, and filters."""
     return list_documents(
         db=db,
-        user_id=current_user.user_id,
+        user_or_id=current_user,
         page=page,
         page_size=page_size,
         search=search,
@@ -104,7 +105,7 @@ def get_document_by_id_endpoint(
         document_id=document_id,
     )
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -125,7 +126,7 @@ def update_document_processing_status(
 ):
     document = get_document_by_id(db=db, document_id=document_id)
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -148,11 +149,11 @@ def delete_document_endpoint(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Delete a document owned by the authenticated user and clean up associated files."""
+    """Delete a document owned by the authenticated user or admin/staff."""
     delete_document(
         db=db,
         document_id=document_id,
-        user_id=current_user.user_id,
+        user_or_id=current_user,
     )
 
 
@@ -165,10 +166,10 @@ def get_document_ocr_text(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Return the stored OCR text for a document owned by the authenticated user."""
+    """Return the stored OCR text for a document accessible to the authenticated user."""
     document = get_document_by_id(db=db, document_id=document_id)
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -188,7 +189,7 @@ def get_sanitized_document_text(
     """Return the sanitized OCR text ready for downstream AI analysis."""
     document = get_document_by_id(db=db, document_id=document_id)
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -220,7 +221,7 @@ def get_document_clinical_entities(
     """Return clinical entities extracted via M4 Biomedical NER from sanitized text."""
     document = get_document_by_id(db=db, document_id=document_id)
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -246,7 +247,7 @@ def classify_document_endpoint(
     """Classify healthcare document type using LLM strictly from sanitized OCR text."""
     document = get_document_by_id(db=db, document_id=document_id)
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -270,7 +271,7 @@ def summarize_document_endpoint(
     """Generate factual clinical summary and key findings using LLM strictly from sanitized OCR text."""
     document = get_document_by_id(db=db, document_id=document_id)
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -294,7 +295,7 @@ def index_document_endpoint(
     """Index document text chunks and vector embeddings for semantic search."""
     document = get_document_by_id(db=db, document_id=document_id)
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -319,7 +320,7 @@ def search_document_endpoint(
     """Perform grounded semantic search / RAG Q&A on a document."""
     document = get_document_by_id(db=db, document_id=document_id)
 
-    if document.uploaded_by != current_user.user_id:
+    if not has_document_access(db, current_user, document):
         raise HTTPException(
             status_code=http_status.HTTP_403_FORBIDDEN,
             detail="Access denied",
@@ -346,12 +347,12 @@ def get_chunk_source_endpoint(
 ):
     """Retrieve the exact RAG chunk used as source evidence (M8).
     Returns sanitized chunk text only. Never exposes raw OCR.
-    Enforces document ownership before returning chunk data."""
+    Enforces document access before returning chunk data."""
     chunk = get_chunk_source(
         db=db,
         document_id=document_id,
         chunk_id=chunk_id,
-        user_id=current_user.user_id,
+        user_or_id=current_user,
     )
 
     return ChunkSourceDetail(
@@ -359,8 +360,8 @@ def get_chunk_source_endpoint(
         chunk_id=chunk.chunk_id,
         chunk_index=chunk.chunk_index,
         page_number=chunk.page_number,
-        similarity_score=None,  # Not stored on the chunk itself; provided by search response
-        text=chunk.chunk_text,  # Sanitized text (chunks are created from sanitized_text only)
+        similarity_score=None,  # Provided by search response
+        text=chunk.chunk_text,  # Sanitized text only
         start_offset=chunk.start_offset,
         end_offset=chunk.end_offset,
     )

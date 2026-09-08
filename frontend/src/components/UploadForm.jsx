@@ -15,7 +15,7 @@ function validateFile(file) {
   return null;
 }
 
-export default function UploadForm({ onUploaded, onError }) {
+export default function UploadForm({ onUploaded, onError, patientId = null, patientName = null }) {
   const [file, setFile] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState(null);
@@ -48,7 +48,7 @@ export default function UploadForm({ onUploaded, onError }) {
     setUploading(true);
     setError(null);
     try {
-      const result = await uploadDocument(file);
+      const result = await uploadDocument(file, patientId);
       onUploaded?.(result);
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
@@ -71,6 +71,37 @@ export default function UploadForm({ onUploaded, onError }) {
         <h2 className="hp-section-title">Upload Healthcare Document</h2>
         <span className="hp-dropzone-subtitle" style={{ margin: 0 }}>Max file size: {MAX_SIZE_MB}MB</span>
       </div>
+
+      {/* Patient context banner — only shown when uploading from a patient workspace */}
+      {patientId && patientName && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            background: "var(--hp-primary-light, #E6F4F4)",
+            border: "1px solid var(--hp-primary-600, #0A5C5F)44",
+            borderRadius: 8,
+            padding: "10px 16px",
+            marginBottom: 16,
+            fontSize: "0.875rem",
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--hp-primary, #0D7377)" strokeWidth="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+          </svg>
+          <span style={{ color: "var(--hp-primary-hover, #0A5C5F)", fontWeight: 600 }}>
+            Uploading for patient:&nbsp;
+          </span>
+          <span style={{ color: "var(--hp-text-900, #1A1D21)", fontWeight: 700 }}>
+            {patientName}
+          </span>
+          <span style={{ marginLeft: "auto", fontSize: "0.75rem", color: "var(--hp-text-500, #6C757D)" }}>
+            Document will be automatically associated with this patient.
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="hp-error-banner" role="alert">

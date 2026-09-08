@@ -10,11 +10,13 @@ class SearchRequest(BaseModel):
 class SourceReference(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    document_id: UUID | None = None
     chunk_id: UUID
     chunk_index: int
     page_number: int | None = None
     similarity_score: float | None = None
     content_preview: str | None = None
+
 
 
 class SearchResponse(BaseModel):

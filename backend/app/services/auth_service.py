@@ -27,6 +27,14 @@ def register_user(
             detail="Email is already registered",
         )
 
+    role_val = user_in.role.value if hasattr(user_in.role, "value") else str(user_in.role)
+    if role_val == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Public registration of administrator accounts is prohibited.",
+        )
+
+
     user = User(
         name=user_in.name,
         email=user_in.email,

@@ -8,10 +8,12 @@ from fastapi import BackgroundTasks, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
+from app.models.user import User
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.document_text import DocumentText
 from app.models.document_entity import DocumentEntity
+
 from app.schemas.document import DocumentProcessingStatus
 from app.services.ocr_service import OCRResult, extract_text
 from app.services.privacy_service import privacy_service
@@ -33,26 +35,53 @@ def _run_ocr_and_store(
     file_path: Path,
     file_type: str,
 ) -> None:
-    """Internal background task to run OCR, Privacy, and M4 Clinical NER using a dedicated DB session."""
+    """Internal background task to run OCR, Privacy, M4 NER, M3 Classification, M5 Summary, and M6 Indexing."""
     db = SessionLocal()
     try:
         ocr_result = extract_text(file_path, file_type)
         doc_text = store_ocr_result(db, document_id, ocr_result)
 
-        # M4 Clinical NER Orchestration
-        # Check that privacy_status == "completed" and sanitized_text is present before running M4
         document = db.query(Document).filter(Document.document_id == document_id).first()
         if document and document.privacy_status == "completed" and doc_text.sanitized_text:
-            logger.info(f"Triggering M4 Clinical NER for document {document_id}")
-            clinical_ner_service.extract_and_store_entities(
-                db=db,
-                document_id=document_id,
-                sanitized_text=doc_text.sanitized_text,
-            )
+            # 1. M4 Clinical NER
+            try:
+                logger.info(f"Triggering M4 Clinical NER for document {document_id}")
+                clinical_ner_service.extract_and_store_entities(
+                    db=db,
+                    document_id=document_id,
+                    sanitized_text=doc_text.sanitized_text,
+                )
+            except Exception as ner_exc:
+                logger.error(f"M4 Clinical NER failed for document {document_id}: {ner_exc}")
+
+            # 2. M3 Classification
+            try:
+                from app.services.classification_service import classification_service
+                logger.info(f"Triggering M3 Classification for document {document_id}")
+                classification_service.classify_document(db=db, document=document)
+            except Exception as class_exc:
+                logger.error(f"M3 Classification failed for document {document_id}: {class_exc}")
+
+            # 3. M5 Summarization
+            try:
+                from app.services.summary_service import summary_service
+                logger.info(f"Triggering M5 Summarization for document {document_id}")
+                summary_service.summarize_document(db=db, document=document)
+            except Exception as sum_exc:
+                logger.error(f"M5 Summarization failed for document {document_id}: {sum_exc}")
+
+            # 4. M6 Vector Indexing
+            try:
+                from app.services.rag_service import rag_service
+                logger.info(f"Triggering M6 Indexing for document {document_id}")
+                rag_service.index_document(db=db, document=document)
+            except Exception as idx_exc:
+                logger.error(f"M6 Indexing failed for document {document_id}: {idx_exc}")
+
         else:
             status_str = document.privacy_status if document else "None"
             logger.warning(
-                f"Skipping M4 Clinical NER for document {document_id}: "
+                f"Skipping downstream AI processing for document {document_id}: "
                 f"privacy_status='{status_str}'"
             )
     except Exception as exc:
@@ -64,6 +93,7 @@ def _run_ocr_and_store(
             logger.error(f"Failed to mark document {document_id} as failed: {inner_exc}")
     finally:
         db.close()
+
 
 
 def upload_document(
@@ -193,7 +223,7 @@ def get_all_documents(
 
 def list_documents(
     db: Session,
-    user_id: UUID,
+    user_or_id: User | UUID,
     page: int = 1,
     page_size: int = 20,
     search: str | None = None,
@@ -202,11 +232,33 @@ def list_documents(
     document_type: str | None = None,
     patient_id: UUID | None = None,
 ) -> dict:
-    """Ownership-scoped document listing with pagination, search, and filters."""
-    query = (
-        db.query(Document)
-        .filter(Document.uploaded_by == user_id)
-    )
+    """Ownership and patient-access scoped document listing with pagination, search, and filters."""
+    from app.models.user import User
+    from app.schemas.user import UserRole
+    from app.models.patient import PatientAssignment
+
+    if isinstance(user_or_id, User):
+        user = user_or_id
+        user_id = user.user_id
+    else:
+        user_id = user_or_id
+        user = db.query(User).filter(User.user_id == user_id).first()
+
+    query = db.query(Document)
+
+    # Filtering logic based on user role and patient assignments
+    if user and user.role not in (UserRole.ADMIN.value, UserRole.RECORDS_STAFF.value):
+        assigned_patient_ids = (
+            db.query(PatientAssignment.patient_id)
+            .filter(PatientAssignment.user_id == user_id)
+            .scalar_subquery()
+        )
+        query = query.filter(
+            (Document.uploaded_by == user_id)
+            | (Document.patient_id.in_(assigned_patient_ids))
+        )
+    elif not user:
+        query = query.filter(Document.uploaded_by == user_id)
 
     # Filename search (case-insensitive)
     if search:
@@ -245,9 +297,12 @@ def list_documents(
 def delete_document(
     db: Session,
     document_id: UUID,
-    user_id: UUID,
+    user_or_id: User | UUID,
 ) -> None:
-    """Delete a document owned by the authenticated user. Cleans up the associated file."""
+    """Delete a document. Uploader or Admin / Records Staff can delete."""
+    from app.models.user import User
+    from app.schemas.user import UserRole
+
     document = (
         db.query(Document)
         .filter(Document.document_id == document_id)
@@ -260,11 +315,20 @@ def delete_document(
             detail="Document not found",
         )
 
-    if document.uploaded_by != user_id:
+    if isinstance(user_or_id, User):
+        user = user_or_id
+        user_id = user.user_id
+    else:
+        user_id = user_or_id
+        user = db.query(User).filter(User.user_id == user_id).first()
+
+    is_admin_or_staff = user and user.role in (UserRole.ADMIN.value, UserRole.RECORDS_STAFF.value)
+    if document.uploaded_by != user_id and not is_admin_or_staff:
         raise HTTPException(
             status_code=403,
             detail="Access denied",
         )
+
 
     # Attempt to remove the uploaded file from disk safely
     if document.file_url:
@@ -286,9 +350,12 @@ def get_chunk_source(
     db: Session,
     document_id: UUID,
     chunk_id: UUID,
-    user_id: UUID,
+    user_or_id: User | UUID,
 ) -> DocumentChunk:
-    """Retrieve a specific chunk for M8 source verification. Enforces ownership."""
+    """Retrieve a specific chunk for M8 source verification. Enforces patient access permission."""
+    from app.models.user import User
+    from app.services.patient_service import has_document_access
+
     document = (
         db.query(Document)
         .filter(Document.document_id == document_id)
@@ -301,7 +368,12 @@ def get_chunk_source(
             detail="Document not found",
         )
 
-    if document.uploaded_by != user_id:
+    if isinstance(user_or_id, User):
+        user = user_or_id
+    else:
+        user = db.query(User).filter(User.user_id == user_or_id).first()
+
+    if user and not has_document_access(db, user, document):
         raise HTTPException(
             status_code=403,
             detail="Access denied",
@@ -323,6 +395,7 @@ def get_chunk_source(
         )
 
     return chunk
+
 
 def get_document_by_id(
     db: Session,

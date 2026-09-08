@@ -47,3 +47,9 @@ class User(Base):
         "Document",
         back_populates="uploader",
     )
+
+    assigned_patients: Mapped[list["PatientAssignment"]] = relationship(  # noqa: F821
+        "PatientAssignment",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )

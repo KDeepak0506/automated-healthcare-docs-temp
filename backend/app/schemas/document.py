@@ -1,5 +1,5 @@
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from enum import Enum
 from datetime import datetime
 
@@ -27,3 +27,13 @@ class DocumentResponse(BaseModel):
     processing_status: DocumentProcessingStatus
     privacy_status: str = "pending"
     uploaded_at: datetime
+
+
+class PaginatedDocumentResponse(BaseModel):
+    """Paginated wrapper for document listing (M7)."""
+
+    items: list[DocumentResponse]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int

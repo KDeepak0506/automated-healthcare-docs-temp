@@ -100,7 +100,7 @@ def test_document_listing_and_status_update(
     )
 
     assert listing.status_code == 200
-    assert [item["document_id"] for item in listing.json()] == [document_id]
+    assert [item["document_id"] for item in listing.json()["items"]] == [document_id]
     assert update.status_code == 200
     assert update.json()["processing_status"] == "Completed"
 

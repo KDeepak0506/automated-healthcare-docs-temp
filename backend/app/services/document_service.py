@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.document import Document
+from app.models.document_chunk import DocumentChunk
 from app.models.document_text import DocumentText
 from app.models.document_entity import DocumentEntity
 from app.schemas.document import DocumentProcessingStatus
@@ -179,7 +181,7 @@ def update_document_status(
 def get_all_documents(
     db: Session,
 ) -> list[Document]:
-
+    """Internal helper: returns all documents (no ownership filter). Not exposed via API."""
     documents = (
         db.query(Document)
         .order_by(Document.uploaded_at.desc())
@@ -187,6 +189,140 @@ def get_all_documents(
     )
 
     return documents
+
+
+def list_documents(
+    db: Session,
+    user_id: UUID,
+    page: int = 1,
+    page_size: int = 20,
+    search: str | None = None,
+    processing_status: str | None = None,
+    privacy_status: str | None = None,
+    document_type: str | None = None,
+    patient_id: UUID | None = None,
+) -> dict:
+    """Ownership-scoped document listing with pagination, search, and filters."""
+    query = (
+        db.query(Document)
+        .filter(Document.uploaded_by == user_id)
+    )
+
+    # Filename search (case-insensitive)
+    if search:
+        query = query.filter(Document.file_name.ilike(f"%{search}%"))
+
+    # Status filters
+    if processing_status:
+        query = query.filter(Document.processing_status == processing_status)
+    if privacy_status:
+        query = query.filter(Document.privacy_status == privacy_status)
+    if document_type:
+        query = query.filter(Document.document_type == document_type)
+    if patient_id:
+        query = query.filter(Document.patient_id == patient_id)
+
+    total = query.count()
+    total_pages = math.ceil(total / page_size) if page_size > 0 else 1
+
+    items = (
+        query
+        .order_by(Document.uploaded_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    return {
+        "items": items,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": max(total_pages, 1),
+    }
+
+
+def delete_document(
+    db: Session,
+    document_id: UUID,
+    user_id: UUID,
+) -> None:
+    """Delete a document owned by the authenticated user. Cleans up the associated file."""
+    document = (
+        db.query(Document)
+        .filter(Document.document_id == document_id)
+        .first()
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    if document.uploaded_by != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied",
+        )
+
+    # Attempt to remove the uploaded file from disk safely
+    if document.file_url:
+        file_path = Path(document.file_url)
+        try:
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"Could not delete file {file_path} for document {document_id}: {exc}"
+            )
+
+    # Database delete — cascades to document_text, document_entities, document_chunks
+    db.delete(document)
+    db.commit()
+
+
+def get_chunk_source(
+    db: Session,
+    document_id: UUID,
+    chunk_id: UUID,
+    user_id: UUID,
+) -> DocumentChunk:
+    """Retrieve a specific chunk for M8 source verification. Enforces ownership."""
+    document = (
+        db.query(Document)
+        .filter(Document.document_id == document_id)
+        .first()
+    )
+
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+        )
+
+    if document.uploaded_by != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied",
+        )
+
+    chunk = (
+        db.query(DocumentChunk)
+        .filter(
+            DocumentChunk.chunk_id == chunk_id,
+            DocumentChunk.document_id == document_id,
+        )
+        .first()
+    )
+
+    if chunk is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Source chunk not found",
+        )
+
+    return chunk
 
 def get_document_by_id(
     db: Session,

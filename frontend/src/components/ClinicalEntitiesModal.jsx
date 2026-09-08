@@ -6,6 +6,7 @@ import {
   summarizeDocument,
   indexDocument,
   searchDocument,
+  getChunkSource,
 } from "../api/documents";
 
 
@@ -34,15 +35,33 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
   const [isClassifying, setIsClassifying] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
 
-  // M6 RAG states
+  // M6 RAG & M8 Source Verification states
   const [ragQuery, setRagQuery] = useState("");
   const [ragAnswer, setRagAnswer] = useState(null);
   const [ragSources, setRagSources] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [isIndexing, setIsIndexing] = useState(false);
   const [indexStatus, setIndexStatus] = useState(null);
+  const [activeChunkDetail, setActiveChunkDetail] = useState(null);
+  const [loadingChunkId, setLoadingChunkId] = useState(null);
 
   const [activeTab, setActiveTab] = useState("overview");
+
+  const handleInspectChunkSource = async (chunkId) => {
+    if (activeChunkDetail && activeChunkDetail.chunk_id === chunkId) {
+      setActiveChunkDetail(null);
+      return;
+    }
+    try {
+      setLoadingChunkId(chunkId);
+      const detail = await getChunkSource(document.document_id, chunkId);
+      setActiveChunkDetail(detail);
+    } catch (err) {
+      console.error("Could not fetch source chunk:", err);
+    } finally {
+      setLoadingChunkId(null);
+    }
+  };
 
 
   useEffect(() => {
@@ -741,42 +760,100 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
                         Referenced Document Sources ({ragSources.length})
                       </h4>
                       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                        {ragSources.map((source, idx) => (
-                          <div
-                            key={idx}
-                            style={{
-                              background: "#ffffff",
-                              borderRadius: "8px",
-                              border: "1px solid #e2e8f0",
-                              padding: "12px 16px",
-                            }}
-                          >
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                              <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "#334155" }}>
-                                Chunk #{source.chunk_index} {source.page_number != null ? `(Page ${source.page_number})` : ""}
-                              </span>
-                              {source.similarity_score != null && (
-                                <span
+                        {ragSources.map((source, idx) => {
+                          const isExpanded = activeChunkDetail && activeChunkDetail.chunk_id === source.chunk_id;
+                          const isLoadingThis = loadingChunkId === source.chunk_id;
+
+                          return (
+                            <div
+                              key={idx}
+                              style={{
+                                background: "#ffffff",
+                                borderRadius: "8px",
+                                border: isExpanded ? "1.5px solid var(--hp-primary, #0284c7)" : "1px solid #e2e8f0",
+                                padding: "12px 16px",
+                                transition: "all 0.2s ease",
+                              }}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "#334155" }}>
+                                    Chunk #{source.chunk_index} {source.page_number != null ? `(Page ${source.page_number})` : ""}
+                                  </span>
+                                  {source.similarity_score != null && (
+                                    <span
+                                      style={{
+                                        fontSize: "0.7rem",
+                                        padding: "2px 6px",
+                                        borderRadius: "4px",
+                                        background: "#e0f2fe",
+                                        color: "#0369a1",
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      {(source.similarity_score * 100).toFixed(1)}% match
+                                    </span>
+                                  )}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleInspectChunkSource(source.chunk_id)}
+                                  disabled={isLoadingThis}
                                   style={{
-                                    fontSize: "0.7rem",
-                                    padding: "2px 6px",
+                                    background: isExpanded ? "#0284c7" : "#f1f5f9",
+                                    color: isExpanded ? "#ffffff" : "#334155",
+                                    border: "1px solid #cbd5e1",
+                                    padding: "3px 8px",
                                     borderRadius: "4px",
-                                    background: "#e0f2fe",
-                                    color: "#0369a1",
+                                    fontSize: "0.725rem",
                                     fontWeight: 600,
+                                    cursor: "pointer",
                                   }}
                                 >
-                                  {(source.similarity_score * 100).toFixed(1)}% match
-                                </span>
+                                  {isLoadingThis ? "Loading..." : isExpanded ? "Hide Source Text" : "Verify Full Source"}
+                                </button>
+                              </div>
+
+                              {source.content_preview && !isExpanded && (
+                                <p style={{ margin: 0, fontSize: "0.8125rem", color: "#64748b", lineHeight: "1.4" }}>
+                                  {source.content_preview}
+                                </p>
+                              )}
+
+                              {isExpanded && activeChunkDetail && (
+                                <div
+                                  style={{
+                                    marginTop: "10px",
+                                    padding: "12px",
+                                    background: "#0f172a",
+                                    color: "#f8fafc",
+                                    borderRadius: "6px",
+                                    fontSize: "0.8125rem",
+                                    fontFamily: "monospace",
+                                    whiteSpace: "pre-wrap",
+                                    lineHeight: "1.5",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      fontSize: "0.7rem",
+                                      color: "#94a3b8",
+                                      marginBottom: "8px",
+                                      fontFamily: "sans-serif",
+                                      textTransform: "uppercase",
+                                      letterSpacing: "0.5px",
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    Sanitized Evidence Source (Offsets {activeChunkDetail.start_offset}-{activeChunkDetail.end_offset}):
+                                  </div>
+                                  {activeChunkDetail.text}
+                                </div>
                               )}
                             </div>
-                            {source.content_preview && (
-                              <p style={{ margin: 0, fontSize: "0.8125rem", color: "#64748b", lineHeight: "1.4" }}>
-                                {source.content_preview}
-                              </p>
-                            )}
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}

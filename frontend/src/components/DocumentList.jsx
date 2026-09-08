@@ -8,8 +8,18 @@ const STATUS_CLASS = {
   Failed: "hp-status-failed",
 };
 
-export default function DocumentList({ documents, loading, newestId, onDocumentUpdated }) {
+export default function DocumentList({ documents, loading, newestId, onDocumentUpdated, onDelete }) {
   const [selectedDocForEntities, setSelectedDocForEntities] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+
+  const handleDeleteClick = (doc) => {
+    if (window.confirm(`Are you sure you want to delete "${doc.file_name || doc.document_id}"? This cannot be undone.`)) {
+      if (onDelete) {
+        setDeletingId(doc.document_id);
+        onDelete(doc.document_id).finally(() => setDeletingId(null));
+      }
+    }
+  };
 
   if (loading) {
     return (
@@ -34,7 +44,7 @@ export default function DocumentList({ documents, loading, newestId, onDocumentU
               <line x1="9" y1="15" x2="15" y2="15"></line>
             </svg>
           </div>
-          <h3 className="hp-empty-title">No healthcare documents yet</h3>
+          <h3 className="hp-empty-title">No healthcare documents found</h3>
           <p className="hp-empty-text">
             Upload your first lab report, discharge summary, or prescription to begin automated intake and tracking.
           </p>
@@ -76,6 +86,7 @@ export default function DocumentList({ documents, loading, newestId, onDocumentU
           <tbody>
             {documents.map((doc) => {
               const isNew = doc.document_id === newestId;
+              const isDeleting = deletingId === doc.document_id;
               const statusClass = STATUS_CLASS[doc.processing_status] || "hp-status-pending";
 
               const privacyStatus = doc.privacy_status || "pending";
@@ -151,32 +162,60 @@ export default function DocumentList({ documents, loading, newestId, onDocumentU
                     </span>
                   </td>
                   <td>
-                    {privacyStatus === "completed" ? (
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      {privacyStatus === "completed" ? (
+                        <button
+                          onClick={() => setSelectedDocForEntities(doc)}
+                          style={{
+                            background: "var(--hp-primary-50, #f0f9ff)",
+                            color: "var(--hp-primary, #0284c7)",
+                            border: "1px solid var(--hp-primary-200, #bae6fd)",
+                            padding: "4px 10px",
+                            borderRadius: "6px",
+                            fontSize: "0.75rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                          </svg>
+                          Intelligence
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>—</span>
+                      )}
+
                       <button
-                        onClick={() => setSelectedDocForEntities(doc)}
+                        onClick={() => handleDeleteClick(doc)}
+                        disabled={isDeleting}
+                        title="Delete document"
                         style={{
-                          background: "var(--hp-primary-50, #f0f9ff)",
-                          color: "var(--hp-primary, #0284c7)",
-                          border: "1px solid var(--hp-primary-200, #bae6fd)",
-                          padding: "4px 10px",
+                          background: "#fff1f2",
+                          color: "#e11d48",
+                          border: "1px solid #fecdd3",
+                          padding: "4px 8px",
                           borderRadius: "6px",
                           fontSize: "0.75rem",
                           fontWeight: 600,
-                          cursor: "pointer",
+                          cursor: isDeleting ? "not-allowed" : "pointer",
+                          opacity: isDeleting ? 0.6 : 1,
                           display: "inline-flex",
                           alignItems: "center",
                           gap: "4px",
                         }}
                       >
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <circle cx="11" cy="11" r="8"></circle>
-                          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                          <polyline points="3 6 5 6 21 6"></polyline>
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                         </svg>
-                        Intelligence
+                        {isDeleting ? "..." : "Delete"}
                       </button>
-                    ) : (
-                      <span style={{ fontSize: "0.75rem", color: "#94a3b8" }}>—</span>
-                    )}
+                    </div>
                   </td>
                 </tr>
               );

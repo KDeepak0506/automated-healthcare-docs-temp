@@ -26,3 +26,16 @@ class IndexResponse(BaseModel):
     document_id: UUID
     chunks_created: int
     status: str
+
+
+class ChunkSourceDetail(BaseModel):
+    """Full chunk detail returned by M8 source verification endpoint."""
+
+    document_id: UUID
+    chunk_id: UUID
+    chunk_index: int
+    page_number: int | None = None
+    similarity_score: float | None = None
+    text: str
+    start_offset: int | None = None
+    end_offset: int | None = None

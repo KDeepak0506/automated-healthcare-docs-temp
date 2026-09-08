@@ -21,6 +21,13 @@ from app.services.llm_service import (
 
 logger = logging.getLogger(__name__)
 
+# Hard cap on sanitized text characters sent to Groq.
+# 50,000 chars (the settings default) exceeds Groq free-tier per-request
+# token limits for the gpt-oss-20b model, producing HTTP 413 errors.
+# 6,000 chars (~1,500 tokens) leaves ample headroom for the system/user
+# prompt overhead while still capturing the most clinically relevant content.
+_MAX_SUMMARY_INPUT_CHARS: int = 6000
+
 SYSTEM_PROMPT = (
     "You are an expert healthcare documentation summarizer working within a strict clinical privacy boundary. "
     "Summarize the supplied de-identified document factually and accurately. "
@@ -93,15 +100,24 @@ class SummaryService:
             )
 
         # 4. Oversized text guard
+        # Use _MAX_SUMMARY_INPUT_CHARS (not the larger settings value) to stay
+        # within Groq free-tier per-request limits and avoid HTTP 413 errors.
         sanitized_text = doc_text.sanitized_text.strip()
+        original_char_count = len(sanitized_text)
         is_truncated = False
-        if len(sanitized_text) > settings.max_sanitized_text_chars:
-            logger.warning(
-                f"Sanitized text for document {document.document_id} exceeded "
-                f"{settings.max_sanitized_text_chars} chars and was truncated for summarization."
-            )
-            sanitized_text = sanitized_text[: settings.max_sanitized_text_chars]
+        if original_char_count > _MAX_SUMMARY_INPUT_CHARS:
+            sanitized_text = sanitized_text[:_MAX_SUMMARY_INPUT_CHARS]
             is_truncated = True
+            logger.warning(
+                f"document_id={document.document_id} sanitized text truncated for summarization: "
+                f"original={original_char_count} chars, bounded={_MAX_SUMMARY_INPUT_CHARS} chars, "
+                f"truncated=True"
+            )
+        else:
+            logger.info(
+                f"document_id={document.document_id} sanitized text within limit: "
+                f"{original_char_count} chars, truncated=False"
+            )
 
         # 5. Build prompt and call LLM
         prompt = self.build_summary_prompt(sanitized_text)

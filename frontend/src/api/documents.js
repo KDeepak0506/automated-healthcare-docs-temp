@@ -12,10 +12,16 @@ export async function uploadDocument(file, patientId) {
   return data; // { document_id, status, uploaded_at }
 }
 
-// GET /api/v1/documents — backend returns a raw array, no pagination yet.
-export async function listDocuments() {
-  const { data } = await client.get("/documents");
-  return data; // DocumentResponse[]
+// GET /api/v1/documents — paginated, searchable, filterable (M7)
+export async function listDocuments(params = {}) {
+  const { data } = await client.get("/documents", { params });
+  return data; // { items: DocumentResponse[], page, page_size, total, total_pages }
+}
+
+// DELETE /api/v1/documents/{documentId} (M7)
+export async function deleteDocument(documentId) {
+  const { data } = await client.delete(`/documents/${documentId}`);
+  return data;
 }
 
 export async function getDocumentStatus(documentId) {
@@ -60,3 +66,8 @@ export async function searchDocument(documentId, query, topK = 5) {
   return data; // { answer, sources }
 }
 
+// GET /api/v1/documents/{documentId}/sources/{chunkId} (M8)
+export async function getChunkSource(documentId, chunkId) {
+  const { data } = await client.get(`/documents/${documentId}/sources/${chunkId}`);
+  return data; // { document_id, chunk_id, chunk_index, page_number, similarity_score, text, start_offset, end_offset }
+}

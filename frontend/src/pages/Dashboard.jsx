@@ -11,6 +11,7 @@ const ACTIVE_STATUSES = ["Pending", "Processing"];
 export default function Dashboard() {
   const { email } = useAuth();
   const [documents, setDocuments] = useState([]);
+  const [totalDocuments, setTotalDocuments] = useState(0);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState(null);
   const pollRef = useRef(null);
@@ -18,7 +19,9 @@ export default function Dashboard() {
   const fetchDocuments = useCallback(async () => {
     try {
       const data = await listDocuments();
-      setDocuments(data || []);
+      const items = Array.isArray(data) ? data : (data?.items || []);
+      setDocuments(items);
+      setTotalDocuments(typeof data?.total === "number" ? data.total : items.length);
     } catch (err) {
       setToast({ message: err.message || "Couldn't load documents.", variant: "error" });
     } finally {
@@ -68,7 +71,7 @@ export default function Dashboard() {
   }, [documents.map((d) => `${d.processing_status}-${d.privacy_status}`).join(",")]);
 
   // Calculate statistics from actual document state
-  const totalCount = documents.length;
+  const totalCount = totalDocuments || documents.length;
   const completedCount = documents.filter((d) => d.processing_status === "Completed").length;
   const processingCount = documents.filter((d) =>
     ACTIVE_STATUSES.includes(d.processing_status)

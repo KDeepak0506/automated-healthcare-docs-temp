@@ -4,7 +4,9 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 
 import groq
-from groq import APIConnectionError, APIStatusError, APITimeoutError, Groq
+from groq import APIConnectionError as GroqConnectionError, APIStatusError as GroqStatusError, APITimeoutError as GroqTimeoutError, Groq
+import openai
+from openai import APIConnectionError as OpenAIConnectionError, APIStatusError as OpenAIStatusError, APITimeoutError as OpenAITimeoutError, OpenAI
 
 from app.core.config import settings
 
@@ -19,7 +21,7 @@ class LLMServiceError(Exception):
 
 
 class LLMConfigurationError(LLMServiceError):
-    """Raised when LLM service is misconfigured (e.g., missing API key)."""
+    """Raised when LLM service is misconfigured (e.g., missing API key or base URL)."""
     pass
 
 
@@ -35,26 +37,42 @@ class LLMResponseParsingError(LLMServiceError):
 
 class LLMService:
     """
-    Shared Groq LLM service for structured output generation.
+    Multi-provider LLM service (Ollama local / Groq cloud) for text and structured output generation.
     Enforces timeout, error translation, and privacy-safe logging.
     """
 
-    def __init__(self, client: Groq | None = None) -> None:
+    def __init__(self, client: Groq | OpenAI | None = None) -> None:
         self._client = client
 
-    def _get_client(self) -> Groq:
+    def _get_client(self) -> Groq | OpenAI:
         if self._client is not None:
             return self._client
 
-        api_key = settings.groq_api_key
-        if not api_key or not api_key.strip():
-            logger.error("Groq API key is missing or not configured")
-            raise LLMConfigurationError("Groq API key is not configured")
+        provider = settings.llm_provider.lower().strip()
+        if provider == "groq":
+            api_key = settings.groq_api_key
+            if not api_key or not api_key.strip():
+                logger.error("Groq API key is missing or not configured")
+                raise LLMConfigurationError("Groq API key is not configured")
 
-        return Groq(
-            api_key=api_key.strip(),
-            timeout=settings.groq_timeout_seconds,
-        )
+            return Groq(
+                api_key=api_key.strip(),
+                timeout=settings.groq_timeout_seconds,
+            )
+        elif provider == "ollama":
+            base_url = settings.ollama_base_url
+            if not base_url or not base_url.strip():
+                logger.error("Ollama base URL is missing or not configured")
+                raise LLMConfigurationError("Ollama base URL is not configured")
+
+            return OpenAI(
+                base_url=base_url.strip(),
+                api_key="ollama",
+                timeout=settings.ollama_timeout_seconds,
+            )
+        else:
+            logger.error(f"Unsupported LLM provider: {settings.llm_provider}")
+            raise LLMConfigurationError(f"Unsupported LLM provider: {settings.llm_provider}")
 
     def _execute_completion(
         self,
@@ -64,17 +82,25 @@ class LLMService:
     ) -> str:
         """
         Internal completion executor handling client initialization,
-        reasoning effort configuration, timeouts, and exception wrapping.
+        model selection, reasoning effort configuration, timeouts, and exception wrapping.
         """
         client = self._get_client()
+        provider = settings.llm_provider.lower().strip()
+
+        if provider == "groq":
+            model = settings.groq_model
+            timeout_sec = settings.groq_timeout_seconds
+        else:
+            model = settings.ollama_model
+            timeout_sec = settings.ollama_timeout_seconds
 
         logger.info(
-            f"Dispatching completion to Groq model={settings.groq_model} "
-            f"timeout={settings.groq_timeout_seconds}s"
+            f"Dispatching completion to provider={provider} model={model} "
+            f"timeout={timeout_sec}s"
         )
 
         completion_kwargs: dict[str, Any] = {
-            "model": settings.groq_model,
+            "model": model,
             "messages": messages,
             "temperature": temperature,
         }
@@ -82,32 +108,32 @@ class LLMService:
         if response_format:
             completion_kwargs["response_format"] = response_format
 
-        # gpt-oss models support reasoning_effort to cap hidden chain-of-thought
+        # gpt-oss models on Groq support reasoning_effort to cap hidden chain-of-thought
         # token usage. Low effort keeps free-tier TPM consumption reasonable for
         # short structured-output tasks like classification/summarization,
-        # which don't need deep multi-step reasoning.
-        if "gpt-oss" in settings.groq_model:
+        # which don't need deep multi-step reasoning. Only apply when configured provider is Groq.
+        if provider == "groq" and "gpt-oss" in model:
             completion_kwargs["reasoning_effort"] = "low"
 
         try:
             chat_completion = client.chat.completions.create(**completion_kwargs)
-        except APITimeoutError as exc:
-            logger.error(f"Groq API request timed out after {settings.groq_timeout_seconds}s")
-            raise LLMTimeoutError("Groq request timed out") from exc
-        except APIConnectionError as exc:
-            logger.error("Groq API network connection failed")
-            raise LLMServiceError("Groq connection error") from exc
-        except APIStatusError as exc:
-            logger.error(f"Groq API returned HTTP status {exc.status_code}")
-            raise LLMServiceError(f"Groq API error: status {exc.status_code}") from exc
+        except (GroqTimeoutError, OpenAITimeoutError) as exc:
+            logger.error(f"LLM request timed out after {timeout_sec}s")
+            raise LLMTimeoutError("LLM request timed out") from exc
+        except (GroqConnectionError, OpenAIConnectionError) as exc:
+            logger.error(f"LLM network connection failed to {provider}")
+            raise LLMServiceError(f"LLM connection error ({provider})") from exc
+        except (GroqStatusError, OpenAIStatusError) as exc:
+            logger.error(f"LLM API returned HTTP status {exc.status_code}")
+            raise LLMServiceError(f"LLM API error: status {exc.status_code}") from exc
         except Exception as exc:
-            logger.error(f"Unexpected error during Groq LLM execution: {exc}")
+            logger.error(f"Unexpected error during LLM execution: {exc}")
             raise LLMServiceError("Failed to communicate with LLM provider") from exc
 
         choices = chat_completion.choices
         if not choices or not choices[0].message or not choices[0].message.content:
-            logger.error("Groq returned empty response choices or content")
-            raise LLMResponseParsingError("Groq returned an empty response")
+            logger.error(f"LLM provider ({provider}) returned empty response choices or content")
+            raise LLMResponseParsingError("LLM returned an empty response")
 
         return choices[0].message.content.strip()
 
@@ -156,7 +182,7 @@ class LLMService:
         try:
             parsed_json = json.loads(raw_content)
         except json.JSONDecodeError as exc:
-            logger.error("Failed to decode JSON from Groq response")
+            logger.error("Failed to decode JSON from LLM response")
             raise LLMResponseParsingError("LLM response is not valid JSON") from exc
 
         try:

@@ -1,4 +1,5 @@
 import logging
+import re
 from uuid import UUID
 import numpy as np
 from fastapi import HTTPException, status
@@ -232,9 +233,10 @@ class RagService:
             f"Strict Instructions:\n"
             f"1. Answer using ONLY the facts and values directly stated in the excerpts above.\n"
             f"2. Preserve all numerical measurements, lab values, percentages, and units exactly without alteration or rounding.\n"
-            f"3. If the excerpts do not contain the answer, state: 'The provided document excerpts do not contain sufficient information to answer this question.'\n"
-            f"4. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
-            f"5. Provide a clear, concise, and direct response."
+            f"3. In laboratory reports, note that an isolated 'H' or 'High' flag indicates an abnormally elevated value above reference range, and 'L' or 'Low' indicates a subnormal value below reference range. Qualitative results such as '1+' or 'Present (+)' where normal is 'Negative' or 'Absent' are abnormal.\n"
+            f"4. If the excerpts do not contain the answer, state: 'The provided document excerpts do not contain sufficient information to answer this question.'\n"
+            f"5. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
+            f"6. Provide a clear, concise, and direct response."
         )
 
         # 6. Execute LLM completion
@@ -268,6 +270,87 @@ class RagService:
             sources=sources,
         )
 
+    @staticmethod
+    def classify_query(query: str) -> str:
+        """
+        Classifies clinical queries into:
+        - IMAGING_DIAGNOSTIC: queries on radiology, imaging, scans, X-rays, ultrasound, ECG.
+        - COMPREHENSIVE_ABNORMAL: queries asking for all abnormal findings, flagged values, or comprehensive summaries.
+        - NARROW_FACTUAL: specific parameter, test, or factual clinical questions.
+        """
+        q_lower = query.lower()
+        if re.search(
+            r"\b(imaging|x-?ray|radiograph|radiology|ultrasound|usg|sonograph|ecg|ekg|electrocardiogram|echo|echocardiogram|ct(\s+scan)?|mri|chest\s+(pa|view)?)\b",
+            q_lower,
+        ):
+            return "IMAGING_DIAGNOSTIC"
+        if re.search(
+            r"\b(abnormal|abnormalities|findings|flagged|flags|h-?flagged|l-?flagged|out\s+of\s+range|high\s+or\s+low|all\s+lab\s+results|summarize\s+all|summary\s+of\s+all|list\s+all|every\s+test|all\s+tests|all\s+findings)\b",
+            q_lower,
+        ):
+            return "COMPREHENSIVE_ABNORMAL"
+        return "NARROW_FACTUAL"
+
+    def _extract_query_keywords(self, query: str) -> list[str]:
+        """Extract key clinical terms from query for keyword-augmented retrieval."""
+        stopwords = {
+            "what", "is", "the", "patient", "patient's", "level", "levels", "value",
+            "values", "test", "tests", "result", "results", "was", "were", "for",
+            "with", "does", "have", "any", "report", "reported", "show", "showed",
+            "please", "tell", "about", "find", "check"
+        }
+        words = [w.lower().strip("?,.!;:\'\"()[]{}") for w in query.split()]
+        cleaned = [w for w in words if len(w) >= 2 and w not in stopwords]
+
+        terms = set(cleaned)
+        if "hemoglobin" in terms or "hb" in terms:
+            terms.update(["hemoglobin", "hb", "haemoglobin"])
+        if "sugar" in terms or "glucose" in terms:
+            terms.update(["glucose", "sugar", "fbs"])
+        if "platelet" in terms or "platelets" in terms:
+            terms.update(["platelet", "platelets"])
+        if "wbc" in terms or "leukocyte" in terms:
+            terms.update(["wbc", "leukocyte"])
+
+        return list(terms)
+
+    def _score_chunk_for_narrow_query(
+        self,
+        chunk_text: str,
+        query_terms: list[str],
+        base_sim: float,
+    ) -> float:
+        """Scores a chunk considering dense cosine similarity and direct test result proximity."""
+        text_lower = chunk_text.lower()
+        score = base_sim
+
+        has_direct_result = False
+        for term in query_terms:
+            pattern_fwd = rf"(?i)\b{re.escape(term)}\b[\s\S]{{0,120}}?\b\d+(?:\.\d+)?\s*(?:g/dl|gm/dl|mg/dl|mcg/dl|mmol/l|umol/l|µmol/l|mEq/l|u/l|iu/l|uiu/ml|miu/ml|ng/ml|pg/ml|bpm|°f|°c|mmhg|g%|vol%|cells/ul|/ul|/hpf|ml/min|lakhs/cumm|cumm|/cmm|%|fl|pg)\b"
+            pattern_rev = rf"(?i)\b\d+(?:\.\d+)?\s*(?:g/dl|gm/dl|mg/dl|mcg/dl|mmol/l|umol/l|µmol/l|mEq/l|u/l|iu/l|uiu/ml|miu/ml|ng/ml|pg/ml|bpm|°f|°c|mmhg|g%|vol%|cells/ul|/ul|/hpf|ml/min|lakhs/cumm|cumm|/cmm|%|fl|pg)\b[\s\S]{{0,120}}?\b{re.escape(term)}\b"
+            if re.search(pattern_fwd, chunk_text) or re.search(pattern_rev, chunk_text):
+                has_direct_result = True
+                break
+
+        if has_direct_result:
+            score += 0.40
+        elif any(re.search(r"\b" + re.escape(t) + r"\b", text_lower) for t in query_terms):
+            score += 0.15
+
+        if not has_direct_result and any(
+            w in text_lower
+            for w in [
+                "factors that interfere",
+                "assay interferences",
+                "further dna studies",
+                "denatured froms of hemoglobins",
+                "clinically correlated",
+            ]
+        ):
+            score -= 0.15
+
+        return score
+
     def search_patient(
         self,
         db: Session,
@@ -279,7 +362,10 @@ class RagService:
         Perform patient-scoped RAG Q&A across ALL authorized documents belonging to patient_id.
         1. Retrieves all documents for patient_id with privacy_status == 'completed'.
         2. Auto-indexes any documents that haven't been chunked/indexed.
-        3. Performs vector similarity search across all patient document chunks.
+        3. Routes query:
+           - IMAGING_DIAGNOSTIC: aggregates all authorized imaging & diagnostic sections.
+           - COMPREHENSIVE_ABNORMAL: aggregates lab flags, qualitative abnormalities, and clinical findings across all docs.
+           - NARROW_FACTUAL: balanced cross-document retrieval ensuring multi-document diversity.
         4. Synthesizes a grounded clinical answer with multi-document source references.
         """
         # 1. Retrieve all completed documents for patient
@@ -314,59 +400,117 @@ class RagService:
                 except Exception as exc:
                     logger.warning(f"Could not auto-index document {doc.document_id} for patient RAG: {exc}")
 
-        # 3. Generate query embedding
-        query_embedding = self.embedder.encode(query)
+        # 3. Classify query intent
+        q_type = self.classify_query(query)
+        selected_chunks_with_scores: list[tuple[DocumentChunk, float]] = []
 
-        # 4. Search across all patient document chunks
-        is_postgres = db.bind is not None and db.bind.dialect.name == "postgresql"
-
-        if is_postgres:
-            distance_expr = DocumentChunk.embedding.cosine_distance(query_embedding)
-            query_results = (
-                db.query(DocumentChunk, distance_expr.label("distance"))
-                .filter(DocumentChunk.document_id.in_(doc_ids))
-                .order_by("distance")
-                .limit(top_k)
-                .all()
+        if q_type == "IMAGING_DIAGNOSTIC":
+            pattern = re.compile(
+                r"(?i)\b(x-?ray|radiograph|radiology|ultrasound|usg|sonograph|ecg|ekg|electrocardiogram|echo|echocardiogram|ct\s+scan|mri|chest|impression|findings)\b"
             )
-            top_chunks = [r[0] for r in query_results]
-            scores = [max(0.0, 1.0 - float(r[1])) if r[1] is not None else 1.0 for r in query_results]
+            for doc in docs:
+                chunks = (
+                    db.query(DocumentChunk)
+                    .filter(DocumentChunk.document_id == doc.document_id)
+                    .order_by(DocumentChunk.chunk_index)
+                    .all()
+                )
+                for c in chunks:
+                    if pattern.search(c.chunk_text):
+                        selected_chunks_with_scores.append((c, 0.95))
+
+        elif q_type == "COMPREHENSIVE_ABNORMAL":
+            flag_pattern = re.compile(
+                r"(?i)(?:\b[HL]\b|\b(High|Low|Borderline High|Very High)\b|\b(1\+|2\+|3\+|Present\s*\(\+\)|Present|Positive|Reactive|Abnormal)\b|\b(IMPRESSION|FINDINGS|Clinical Notes)\b)"
+            )
+            for doc in docs:
+                chunks = (
+                    db.query(DocumentChunk)
+                    .filter(DocumentChunk.document_id == doc.document_id)
+                    .order_by(DocumentChunk.chunk_index)
+                    .all()
+                )
+                # If document has <= 2 chunks (e.g. CBC or Prescription), include all chunks to prevent missing concise findings
+                if len(chunks) <= 2:
+                    for c in chunks:
+                        selected_chunks_with_scores.append((c, 0.90))
+                else:
+                    for c in chunks:
+                        if flag_pattern.search(c.chunk_text):
+                            selected_chunks_with_scores.append((c, 0.85))
+
         else:
-            all_chunks = (
-                db.query(DocumentChunk)
-                .filter(DocumentChunk.document_id.in_(doc_ids))
-                .order_by(DocumentChunk.chunk_index)
-                .all()
-            )
+            # NARROW_FACTUAL: balanced cross-document retrieval
+            query_embedding = self.embedder.encode(query)
             q_vec = np.array(query_embedding, dtype=float)
             q_norm = np.linalg.norm(q_vec)
+            query_terms = self._extract_query_keywords(query)
 
-            scored_chunks = []
-            for c in all_chunks:
-                if c.embedding is not None and len(c.embedding) > 0:
-                    c_vec = np.array(c.embedding, dtype=float)
-                    c_norm = np.linalg.norm(c_vec)
-                    sim = float(np.dot(q_vec, c_vec) / (q_norm * c_norm)) if (q_norm > 0 and c_norm > 0) else 0.0
-                else:
-                    sim = 0.0
-                scored_chunks.append((c, sim))
+            doc_candidates: dict[UUID, list[tuple[DocumentChunk, float, float]]] = {}
+            for doc in docs:
+                chunks = (
+                    db.query(DocumentChunk)
+                    .filter(DocumentChunk.document_id == doc.document_id)
+                    .order_by(DocumentChunk.chunk_index)
+                    .all()
+                )
+                scored = []
+                for c in chunks:
+                    if c.embedding is not None and len(c.embedding) > 0:
+                        c_vec = np.array(c.embedding, dtype=float)
+                        c_norm = np.linalg.norm(c_vec)
+                        sim = float(np.dot(q_vec, c_vec) / (q_norm * c_norm)) if (q_norm > 0 and c_norm > 0) else 0.0
+                    else:
+                        sim = 0.0
 
-            scored_chunks.sort(key=lambda x: x[1], reverse=True)
-            top_selected = scored_chunks[:top_k]
-            top_chunks = [x[0] for x in top_selected]
-            scores = [x[1] for x in top_selected]
+                    final_score = self._score_chunk_for_narrow_query(c.chunk_text, query_terms, sim)
+                    scored.append((c, final_score, sim))
 
-        if not top_chunks:
+                scored.sort(key=lambda x: x[1], reverse=True)
+                if scored:
+                    doc_candidates[doc.document_id] = scored
+
+            # Guarantee representation from each document with matching terms or notable similarity
+            chosen: list[tuple[DocumentChunk, float]] = []
+            for doc_id, scored in doc_candidates.items():
+                best_c, best_score, best_sim = scored[0]
+                if best_score > 0.25 or any(kw in best_c.chunk_text.lower() for kw in query_terms):
+                    chosen.append((best_c, best_sim))
+
+            # Fill remaining slots up to top_k with top runner-ups across documents
+            all_runner_ups = []
+            for doc_id, scored in doc_candidates.items():
+                for c, sc, sim in scored[1:3]:
+                    all_runner_ups.append((c, sc, sim))
+            all_runner_ups.sort(key=lambda x: x[1], reverse=True)
+
+            for c, sc, sim in all_runner_ups:
+                if len(chosen) >= max(top_k, len(chosen)):
+                    break
+                if not any(x[0].chunk_id == c.chunk_id for x in chosen):
+                    chosen.append((c, sim))
+
+            selected_chunks_with_scores = chosen
+
+        # Deduplicate chunks
+        seen_ids = set()
+        unique_chunks_with_scores: list[tuple[DocumentChunk, float]] = []
+        for c, sc in selected_chunks_with_scores:
+            if c.chunk_id not in seen_ids:
+                seen_ids.add(c.chunk_id)
+                unique_chunks_with_scores.append((c, sc))
+
+        if not unique_chunks_with_scores:
             return SearchResponse(
                 answer="No relevant text could be found across the patient's records to answer your query.",
                 sources=[],
             )
 
-        # 5. Build context text and source references
+        # 4. Build context text and source references
         sources: list[SourceReference] = []
         context_blocks: list[str] = []
 
-        for idx, (chunk, score) in enumerate(zip(top_chunks, scores), start=1):
+        for idx, (chunk, score) in enumerate(unique_chunks_with_scores, start=1):
             doc = doc_map.get(chunk.document_id)
             doc_name = doc.file_name if doc else str(chunk.document_id)
             preview = chunk.chunk_text[:150] + ("..." if len(chunk.chunk_text) > 150 else "")
@@ -388,18 +532,21 @@ class RagService:
 
         context_text = "\n\n".join(context_blocks)
         prompt = (
-            f"You are answering a question based strictly on excerpts from a patient's de-identified clinical records.\n\n"
+            f"You are an expert clinical AI assistant answering a question based strictly on excerpts from a patient's de-identified medical records.\n\n"
             f"Patient Record Excerpts:\n\"\"\"\n{context_text}\n\"\"\"\n\n"
             f"User Question: {query}\n\n"
-            f"Strict Instructions:\n"
-            f"1. Answer using ONLY the facts and values directly stated in the excerpts above.\n"
-            f"2. Preserve all numerical measurements, lab values, percentages, and units exactly without alteration or rounding.\n"
-            f"3. If the excerpts do not contain the answer, state: 'The provided patient record excerpts do not contain sufficient information to answer this question.'\n"
-            f"4. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
-            f"5. Provide a clear, concise, and direct response."
+            f"Clinical Instructions:\n"
+            f"1. Answer factually using ONLY the facts and values directly stated in the excerpts above.\n"
+            f"2. Cite the specific document name(s) when presenting findings or test values.\n"
+            f"3. In laboratory reports, note that an isolated 'H' or 'High' flag indicates an abnormally elevated value above reference range, and 'L' or 'Low' indicates a subnormal value below reference range. Qualitative results such as '1+' or 'Present (+)' where normal is 'Negative' or 'Absent' are abnormal.\n"
+            f"4. If relevant values or findings appear across multiple documents, report all reported values with their respective document sources and units (do not omit values from other documents).\n"
+            f"5. Preserve all numerical measurements, reference ranges, and units exactly as stated.\n"
+            f"6. If the provided excerpts do not mention or contain any information regarding the question, clearly state that no records or information were found for that question.\n"
+            f"7. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
+            f"8. Provide a clear, comprehensive, and well-structured response."
         )
 
-        # 6. Generate LLM completion
+        # 5. Generate LLM completion
         try:
             answer = self.llm.generate_text(
                 prompt=prompt,

@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { getPatient } from "../api/patients";
-import { listDocuments, uploadDocument, getDocumentStatus } from "../api/documents";
+import { listDocuments, uploadDocument, getDocumentStatus, getChunkSource } from "../api/documents";
 import { searchPatientAI } from "../api/patients";
 import Toast from "../components/Toast";
 
@@ -80,8 +80,235 @@ function StatusBadge({ status }) {
   );
 }
 
+/* ─────────────────── SourceInspectionModal ─────────────────── */
+function SourceInspectionModal({ source, onClose }) {
+  const [detail, setDetail] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await getChunkSource(source.document_id, source.chunk_id);
+        if (active) setDetail(data);
+      } catch (err) {
+        if (active) setError(err.response?.data?.detail || "Failed to load source chunk detail.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [source]);
+
+  const docName =
+    source.content_preview && source.content_preview.startsWith("[")
+      ? source.content_preview.split("]")[0].replace("[", "")
+      : "Document";
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        backgroundColor: "rgba(0, 0, 0, 0.65)",
+        backdropFilter: "blur(4px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 9999,
+        padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "var(--hp-bg-100)",
+          border: "1px solid var(--hp-border-subtle)",
+          borderRadius: 12,
+          width: "100%",
+          maxWidth: 680,
+          maxHeight: "85vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 20px 40px rgba(0,0,0,0.4)",
+          overflow: "hidden",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div
+          style={{
+            padding: "16px 20px",
+            borderBottom: "1px solid var(--hp-border-subtle)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: "var(--hp-bg-200)",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: "0.95rem", fontWeight: 700, color: "var(--hp-text-100)" }}>
+              Source Evidence Inspection
+            </div>
+            <div style={{ fontSize: "0.75rem", color: "var(--hp-text-400)", marginTop: 2 }}>
+              {docName} · Chunk #{source.chunk_index}
+              {source.page_number ? ` · Page ${source.page_number}` : ""}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--hp-text-400)",
+              fontSize: "1.25rem",
+              cursor: "pointer",
+              padding: "4px 8px",
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: 20, overflowY: "auto", flex: 1 }}>
+          {loading && (
+            <div style={{ textAlign: "center", padding: "30px 0", color: "var(--hp-text-300)" }}>
+              Loading verified source chunk...
+            </div>
+          )}
+
+          {error && (
+            <div
+              style={{
+                padding: 12,
+                borderRadius: 8,
+                background: "var(--hp-danger)15",
+                color: "var(--hp-danger)",
+                fontSize: "0.85rem",
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          {detail && (
+            <div>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  marginBottom: 12,
+                  fontSize: "0.75rem",
+                }}
+              >
+                <span
+                  style={{
+                    background: "var(--hp-primary-600)22",
+                    color: "var(--hp-primary-400)",
+                    border: "1px solid var(--hp-primary-600)44",
+                    borderRadius: 6,
+                    padding: "2px 8px",
+                    fontWeight: 600,
+                  }}
+                >
+                  Chunk #{detail.chunk_index}
+                </span>
+                {source.similarity_score !== undefined && source.similarity_score !== null && (
+                  <span
+                    style={{
+                      background: "var(--hp-success)18",
+                      color: "var(--hp-success)",
+                      border: "1px solid var(--hp-success)44",
+                      borderRadius: 6,
+                      padding: "2px 8px",
+                      fontWeight: 600,
+                    }}
+                  >
+                    Match: {(source.similarity_score * 100).toFixed(1)}%
+                  </span>
+                )}
+                {detail.start_offset !== null && detail.end_offset !== null && (
+                  <span
+                    style={{
+                      background: "var(--hp-bg-300)",
+                      color: "var(--hp-text-300)",
+                      borderRadius: 6,
+                      padding: "2px 8px",
+                    }}
+                  >
+                    Offsets: {detail.start_offset} – {detail.end_offset}
+                  </span>
+                )}
+              </div>
+
+              <div
+                style={{
+                  background: "#0f172a",
+                  color: "#e2e8f0",
+                  padding: 14,
+                  borderRadius: 8,
+                  fontSize: "0.825rem",
+                  fontFamily: "monospace",
+                  whiteSpace: "pre-wrap",
+                  lineHeight: 1.6,
+                  maxHeight: 380,
+                  overflowY: "auto",
+                  border: "1px solid #1e293b",
+                }}
+              >
+                {detail.text}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div
+          style={{
+            padding: "10px 20px",
+            borderTop: "1px solid var(--hp-border-subtle)",
+            background: "var(--hp-bg-200)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: "0.72rem",
+            color: "var(--hp-text-400)",
+          }}
+        >
+          <span>De-Identified Clinical Evidence • M8 Grounding Verified</span>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 6,
+              background: "var(--hp-primary-600)",
+              color: "#fff",
+              border: "none",
+              fontSize: "0.75rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────── AIMessage ─────────────────── */
-function AIMessage({ role, text, sources }) {
+function AIMessage({ role, text, sources, onInspectSource }) {
   return (
     <div
       className={`pw-ai-message pw-ai-${role}`}
@@ -129,24 +356,51 @@ function AIMessage({ role, text, sources }) {
           {text}
         </p>
         {sources && sources.length > 0 && (
-          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {sources.map((s, i) => (
-              <span
-                key={i}
-                title={s.text}
-                style={{
-                  fontSize: "0.7rem",
-                  padding: "2px 8px",
-                  background: "var(--hp-primary-600)22",
-                  border: "1px solid var(--hp-primary-600)44",
-                  borderRadius: 10,
-                  color: "var(--hp-primary-400)",
-                  cursor: "default",
-                }}
-              >
-                Source {i + 1}{s.page_number ? ` · p.${s.page_number}` : ""}
-              </span>
-            ))}
+          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {sources.map((s, i) => {
+              const docLabel =
+                s.content_preview && s.content_preview.startsWith("[")
+                  ? s.content_preview.split("]")[0].replace("[", "")
+                  : `Source ${i + 1}`;
+              const tooltip = s.content_preview || s.text || "Click to verify source chunk evidence";
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => onInspectSource && onInspectSource(s)}
+                  title={tooltip}
+                  style={{
+                    fontSize: "0.72rem",
+                    padding: "3px 9px",
+                    background: "var(--hp-primary-600)18",
+                    border: "1px solid var(--hp-primary-600)55",
+                    borderRadius: 12,
+                    color: "var(--hp-primary-400)",
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    transition: "all 0.15s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "var(--hp-primary-600)33";
+                    e.currentTarget.style.borderColor = "var(--hp-primary-500)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "var(--hp-primary-600)18";
+                    e.currentTarget.style.borderColor = "var(--hp-primary-600)55";
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>{docLabel}</span>
+                  {s.chunk_index !== undefined && <span>· #{s.chunk_index}</span>}
+                  {s.page_number ? <span>· p.{s.page_number}</span> : ""}
+                  {s.similarity_score !== undefined && s.similarity_score !== null && (
+                    <span style={{ opacity: 0.85 }}>({(s.similarity_score * 100).toFixed(0)}%)</span>
+                  )}
+                  <span style={{ fontSize: "0.65rem", opacity: 0.7 }}>🔍</span>
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
@@ -176,6 +430,7 @@ export default function PatientWorkspacePage() {
   ]);
   const [aiQuery, setAiQuery] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
+  const [activeSource, setActiveSource] = useState(null);
   const chatBottomRef = useRef(null);
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -633,7 +888,13 @@ export default function PatientWorkspacePage() {
             }}
           >
             {messages.map((msg, i) => (
-              <AIMessage key={i} role={msg.role} text={msg.text} sources={msg.sources} />
+              <AIMessage
+                key={i}
+                role={msg.role}
+                text={msg.text}
+                sources={msg.sources}
+                onInspectSource={setActiveSource}
+              />
             ))}
             {aiLoading && (
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -763,6 +1024,9 @@ export default function PatientWorkspacePage() {
       </div>
 
       <Toast message={toast?.message} variant={toast?.variant} onClose={() => setToast(null)} />
+      {activeSource && (
+        <SourceInspectionModal source={activeSource} onClose={() => setActiveSource(null)} />
+      )}
 
       <style>{`
         @keyframes hp-bounce {

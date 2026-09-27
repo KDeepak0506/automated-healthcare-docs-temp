@@ -36,11 +36,30 @@ GENERIC_HEADERS = {
     "notes & interpretation",
 }
 
+# Build a helper that allows optional whitespace around '/' inside a unit token.
+# e.g. "mg/dL" also matches "mg / dL" as produced by OCR.
+def _slash_unit(unit: str) -> str:
+    """Return a regex fragment for *unit* that tolerates OCR spaces around '/'."""
+    return unit.replace("/", r"\s*/\s*")
+
+
+_SLASH_UNITS = [
+    "mg/dL", "g/dL", "mcg/dL", "mmol/L", "umol/L", "µmol/L", "mEq/L",
+    "U/L", "IU/L", "uIU/mL", "mIU/mL", "ng/mL", "pg/mL",
+    "mL/min/1.73m2", "mL/min",
+    "cells/uL", "/uL", "/hpf", "/HPF",
+    "g%", "vol%",
+]
+
+# Build an alternation of all compound units, each tolerating spaces around '/'
+_UNIT_ALT = "|".join(_slash_unit(u) for u in _SLASH_UNITS)
+
 LAB_VALUE_PATTERNS = [
     # Blood pressure e.g. 140/90 mmHg or 140/90
     (r"\b\d{2,3}/\d{2,3}\s*(?:mmHg|mm Hg)?\b", "lab value", 0.95),
-    # Numbers with lab units e.g. 192 mg/dL, 8.2 %, 1.41 mg/dL, 139 mmol/L, 57.10 mL/min, 9.5 mg/dL, 21 U/L, 98.6 °F, 78 bpm, 2-4 / hpf
-    (r"\b\d+(?:\.\d+)?\s*(?:%|mg/dL|g/dL|mcg/dL|mmol/L|umol/L|µmol/L|mEq/L|U/L|IU/L|uIU/mL|mIU/mL|ng/mL|pg/mL|bpm|°F|°C|mmHg|mm Hg|g%|vol%|cells/uL|/uL|/hpf|/HPF|mL/min|mL/min/1\.73m2)\b", "lab value", 0.95),
+    # Numbers with lab units e.g. 192 mg/dL, 8.2%, 1.41 mg / dL, 139 mmol/L, 57.10 mL/min, 21 U/L, 98.6 °F, 78 bpm
+    # Trailing (?!\w) instead of \b so non-word unit endings (e.g. %) aren't blocked.
+    (r"\b\d+(?:\.\d+)?\s*(?:%|bpm|\u00b0F|\u00b0C|mmHg|mm Hg|" + _UNIT_ALT + r")(?!\w)", "lab value", 0.95),
     # Cell count / Scientific notation / counts with commas e.g. 6.8 x 10^3 / uL, 240,000 / uL
     (r"\b\d+(?:\.\d+)?\s*(?:x\s*10\^(?:3|6|9)|x\s*10\*(?:3|6|9)|,\d{3})\s*(?:/uL|/L|/mL|/hpf)?\b", "lab value", 0.93),
 ]
@@ -218,10 +237,11 @@ class ClinicalNERService:
         Rule/pattern fallback when GLiNER model is not loaded or fails.
         """
         patterns = [
-            (r"\b(hypertension|diabetes|type 2 diabetes|asthma|pneumonia|arrhythmia|ischemia|headache|fever|cough|chest pain)\b", "disease", 0.88),
+            # fever and cough are symptoms, not diseases; removed from disease pattern
+            (r"\b(hypertension|diabetes|type 2 diabetes|asthma|pneumonia|arrhythmia|ischemia|headache|chest pain)\b", "disease", 0.88),
             (r"\b(aspirin|metformin|lisinopril|amoxicillin|ibuprofen|paracetamol|atorvastatin|omeprazole)\b", "medication", 0.92),
             (r"\b(\d+\s*(mg|g|mcg|ml|tablets?|capsules?))\b", "dosage", 0.85),
-            (r"\b(shortness of breath|fatigue|dizziness|nausea|pain|swelling|rash)\b", "symptom", 0.84),
+            (r"\b(fever|cough|shortness of breath|fatigue|dizziness|nausea|pain|swelling|rash)\b|\babdominal pain\b", "symptom", 0.84),
             (r"\b(ecg|electrocardiogram|chest x-ray|mri|ct scan|biopsy|endoscopy|blood test|angioplasty)\b", "procedure", 0.89),
             (r"\b(heart|lungs?|liver|kidney|brain|abdomen|chest|left arm)\b", "anatomical structure", 0.82),
             (r"\b(hemoglobin|hba1c|white blood cell count|serum creatinine|glucose|cholesterol|wbc count|platelet count)\b", "lab test", 0.87),

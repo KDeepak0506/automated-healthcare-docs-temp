@@ -274,7 +274,8 @@ class RagService:
         """
         Classifies clinical queries into:
         - IMAGING_DIAGNOSTIC: queries on radiology, imaging, scans, X-rays, ultrasound, ECG.
-        - COMPREHENSIVE_ABNORMAL: queries asking for all abnormal findings, flagged values, or comprehensive summaries.
+        - COMPREHENSIVE_ABNORMAL: queries asking for all abnormal findings, flagged values,
+          comprehensive summaries, cross-document lab aggregations, or diabetes-related markers.
         - NARROW_FACTUAL: specific parameter, test, or factual clinical questions.
         """
         q_lower = query.lower()
@@ -288,6 +289,21 @@ class RagService:
             q_lower,
         ):
             return "COMPREHENSIVE_ABNORMAL"
+        # Additive extension: out-of-range without "abnormal" vocabulary,
+        # conflicting/inconsistent data, and diabetes-marker queries.
+        if re.search(
+            r"\b("
+            r"outside\s+(?:their|the|its|normal)\s+(?:reference\s+)?range"
+            r"|conflicting"
+            r"|inconsistent\s+(?:lab|results?|data|values?)"
+            r"|any\s+inconsistenc"
+            r"|diabet(?:es|ic)\s+(?:risk|markers?|signs?|indicators?)"
+            r"|signs?\s+(?:of\s+)?diabet"
+            r"|diabet(?:es|ic)\s+markers?"
+            r")\b",
+            q_lower,
+        ):
+            return "COMPREHENSIVE_ABNORMAL"
         return "NARROW_FACTUAL"
 
     def _extract_query_keywords(self, query: str) -> list[str]:
@@ -296,7 +312,11 @@ class RagService:
             "what", "is", "the", "patient", "patient's", "level", "levels", "value",
             "values", "test", "tests", "result", "results", "was", "were", "for",
             "with", "does", "have", "any", "report", "reported", "show", "showed",
-            "please", "tell", "about", "find", "check"
+            "please", "tell", "about", "find", "check",
+            # Noise words from cross-document / aggregation query patterns that produce
+            # false proximity boosts when left in query_terms.
+            "across", "are", "documents", "document", "their", "there", "this",
+            "of", "or", "signs", "data", "in", "between", "its", "all",
         }
         words = [w.lower().strip("?,.!;:\'\"()[]{}") for w in query.split()]
         cleaned = [w for w in words if len(w) >= 2 and w not in stopwords]
@@ -936,12 +956,37 @@ class RagService:
 
         # For comprehensive abnormal / flagged queries, build structured findings context
         findings_context = ""
+        # Tracks whether this is a diabetes-focused or cross-doc aggregation query
+        # so the synthesis prompt can be adjusted accordingly.
+        _is_diabetes_query = bool(re.search(
+            r"(?i)\bdiabet(?:es|ic)|diabet(?:es|ic)\s+(?:risk|markers?|signs?)",
+            query,
+        ))
+        _is_cross_doc_query = bool(re.search(
+            r"(?i)\b(reported\s+across|across\s+(?:the\s+)?(?:patient[\u2019']?s\s+)?documents?|conflicting|inconsistent|outside\s+(?:their|the|its|normal)\s+(?:reference\s+)?range)",
+            query,
+        ))
         if q_type == "COMPREHENSIVE_ABNORMAL":
             raw_findings = self._extract_patient_findings(db, docs)
             if re.search(r"(?i)\bh-?flag(?:ged|s)?\b", query):
                 relevant_findings = [f for f in raw_findings if "High" in f.get("flag", "")]
             elif re.search(r"(?i)\bl-?flag(?:ged|s)?\b", query):
                 relevant_findings = [f for f in raw_findings if "Low" in f.get("flag", "")]
+            elif _is_diabetes_query:
+                # Diabetes-marker queries: filter to glucose/FBS/HbA1c findings.
+                # Matched by test name only — do not require "diabetes" in reference range.
+                _DIABETES_TERMS = frozenset([
+                    "fasting blood sugar", "fbs", "glucose", "blood sugar", "blood sugar fasting",
+                    "hba1c", "hb a1c", "glycated", "glycosylated",
+                ])
+                relevant_findings = [
+                    f for f in raw_findings
+                    if any(t in f.get("test", "").lower() for t in _DIABETES_TERMS)
+                ]
+                # If nothing matched by test name, fall back to all findings so the
+                # LLM has something to work with rather than returning empty context.
+                if not relevant_findings:
+                    relevant_findings = raw_findings
             else:
                 relevant_findings = raw_findings
 
@@ -959,17 +1004,50 @@ class RagService:
                 findings_context = "\n\n".join(sections)
 
         if findings_context:
-            prompt = (
-                f"You are an expert clinical AI assistant reviewing a patient's documented medical records.\n\n"
-                f"User Question: {query}\n\n"
-                f"Documented Findings from Patient Records:\n\"\"\"\n{findings_context}\n\"\"\"\n\n"
-                f"Clinical Instructions:\n"
-                f"1. List EVERY SINGLE documented finding from the list above without omitting, summarizing, or truncating any tests. Every finding in the input must appear in your output.\n"
-                f"2. Group findings strictly by document name.\n"
-                f"3. State all test names, numerical values, units, reference ranges, and flags exactly as listed.\n"
-                f"4. Do NOT invent findings or speculate.\n"
-                f"5. If no findings match the question, state that clearly."
-            )
+            if _is_cross_doc_query:
+                # Cross-document comparison / out-of-range / conflicting queries.
+                # The structured findings list contains only FLAGGED (abnormal) values.
+                # Instruct the LLM to note that non-listed values were within reference range.
+                prompt = (
+                    f"You are an expert clinical AI assistant reviewing a patient's documented medical records.\n\n"
+                    f"User Question: {query}\n\n"
+                    f"Documented Flagged Findings from Patient Records\n"
+                    f"(Note: only values that are outside their reference range are listed. "
+                    f"Values not listed were within the stated reference range in that document.)\n"
+                    f"\"\"\"\n{findings_context}\n\"\"\"\n\n"
+                    f"Clinical Instructions:\n"
+                    f"1. Answer the question using ONLY the findings listed above.\n"
+                    f"2. Group findings by document name.\n"
+                    f"3. State all test names, values, units, reference ranges, and flags exactly as listed.\n"
+                    f"4. For conflicting/inconsistent-data questions, explicitly compare the same test across documents and note any discrepancies.\n"
+                    f"5. If the same test appears in multiple documents with different values, list all of them.\n"
+                    f"6. Remind the reader that normal (in-range) values for the same tests may exist in other documents but are not listed here.\n"
+                    f"7. Do NOT diagnose, invent findings, or make clinical risk judgments."
+                )
+            elif _is_diabetes_query:
+                prompt = (
+                    f"You are an expert clinical AI assistant reviewing a patient's documented medical records.\n\n"
+                    f"User Question: {query}\n\n"
+                    f"Documented Diabetes-Relevant Findings from Patient Records:\n\"\"\"\n{findings_context}\n\"\"\"\n\n"
+                    f"Clinical Instructions:\n"
+                    f"1. List the documented glucose, FBS, and HbA1c values exactly as shown, with units, reference ranges, and flags.\n"
+                    f"2. State factually which values are flagged as High or outside reference range.\n"
+                    f"3. Do NOT diagnose diabetes, assign a risk score, or make clinical recommendations.\n"
+                    f"4. Do NOT invent findings or speculate beyond what is documented.\n"
+                    f"5. If no diabetes-relevant findings are listed, state that clearly."
+                )
+            else:
+                prompt = (
+                    f"You are an expert clinical AI assistant reviewing a patient's documented medical records.\n\n"
+                    f"User Question: {query}\n\n"
+                    f"Documented Findings from Patient Records:\n\"\"\"\n{findings_context}\n\"\"\"\n\n"
+                    f"Clinical Instructions:\n"
+                    f"1. List EVERY SINGLE documented finding from the list above without omitting, summarizing, or truncating any tests. Every finding in the input must appear in your output.\n"
+                    f"2. Group findings strictly by document name.\n"
+                    f"3. State all test names, numerical values, units, reference ranges, and flags exactly as listed.\n"
+                    f"4. Do NOT invent findings or speculate.\n"
+                    f"5. If no findings match the question, state that clearly."
+                )
         else:
             prompt = (
                 f"You are an expert clinical AI assistant answering a question based strictly on excerpts from a patient's de-identified medical records.\n\n"

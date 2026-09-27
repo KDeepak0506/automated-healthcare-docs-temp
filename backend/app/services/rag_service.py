@@ -338,6 +338,25 @@ class RagService:
             terms.discard("type")
             terms.discard("group")
             terms.update(["blood group", "blood type", "abo", "rh", "abo type", "rh (d)"])
+        if "cholesterol" in terms or any(w in terms for w in ["lipid", "triglyceride", "triglycerides", "hdl", "ldl", "vldl"]):
+            terms.update([
+                "cholesterol",
+                "total cholesterol",
+                "hdl cholesterol",
+                "ldl cholesterol",
+                "vldl cholesterol",
+                "non-hdl cholesterol",
+                "triglyceride",
+                "triglycerides",
+                "direct ldl",
+                "vldl",
+                "chol/hdl ratio",
+                "ldl/hdl ratio",
+                "tc/hdl ratio",
+                "chol/hdl",
+                "ldl/hdl",
+                "tc/hdl",
+            ])
 
         return list(terms)
 
@@ -351,24 +370,31 @@ class RagService:
         text_lower = chunk_text.lower()
         score = base_sim
 
-        has_direct_result = False
         units_re = r"(?:g/dl|gm/dl|mg/dl|mcg/dl|mmol/l|umol/l|µmol/l|mEq/l|u/l|iu/l|uiu/ml|miu/ml|ng/ml|pg/ml|bpm|°f|°c|mmhg|g%|vol%|cells/ul|/ul|/hpf|ml/min|lakhs/cumm|cumm|/cmm|%|fl|pg)"
+        explanatory_phrases = ["associated with", "more than", "patient is advised", "risk of", "desirable level", "above "]
+        direct_terms: set[str] = set()
         for term in query_terms:
-            pattern_fwd = rf"(?i)\b{re.escape(term)}\b[\s\S]{{0,120}}?\b\d+(?:\.\d+)?\s*{units_re}\b"
-            pattern_rev = rf"(?i)\b\d+(?:\.\d+)?\s*{units_re}\b[\s\S]{{0,120}}?\b{re.escape(term)}\b"
-            pattern_col = rf"(?i)\b{re.escape(term)}\b[\s\S]{{0,120}}?\b{units_re}\b[\s\S]{{0,100}}?\b\d+(?:\.\d+)?\b"
-            if re.search(pattern_fwd, chunk_text) or re.search(pattern_rev, chunk_text) or re.search(pattern_col, chunk_text):
-                has_direct_result = True
-                break
+            pattern_fwd = rf"(?i)\b{re.escape(term)}\b([\s\S]{{0,120}}?)\b\d+(?:\.\d+)?\s*{units_re}\b"
+            pattern_rev = rf"(?i)\b\d+(?:\.\d+)?\s*{units_re}\b([\s\S]{{0,120}}?)\b{re.escape(term)}\b"
+            pattern_col = rf"(?i)\b{re.escape(term)}\b([\s\S]{{0,120}}?)\b{units_re}\b[\s\S]{{0,100}}?\b\d+(?:\.\d+)?\b"
+            for pat in [pattern_fwd, pattern_rev, pattern_col]:
+                for m in re.finditer(pat, chunk_text):
+                    between = m.group(1).lower()
+                    if not any(exp in between for exp in explanatory_phrases):
+                        direct_terms.add(term)
+
+        has_direct_result = len(direct_terms) > 0
 
         # Qualitative blood typing result proximity (e.g. ABO Type: "A", Rh (D) Type: Positive)
         if not has_direct_result and any(t in query_terms for t in ["blood group", "blood type", "abo", "rh"]):
             blood_pattern = r"(?i)\b(abo\s+type|blood\s+group|rh\s*\(?d?\)?\s*type)\b[\s\S]{0,80}?\b([\"']?[abio][\"']?|positive|negative|\+|-)\b"
             if re.search(blood_pattern, chunk_text):
                 has_direct_result = True
+                direct_terms.add("blood_typing")
 
         if has_direct_result:
-            score += 0.40
+            panel_bonus = min(0.30, (len(direct_terms) - 1) * 0.05) if len(direct_terms) > 1 else 0.0
+            score += 0.40 + panel_bonus
         elif any(re.search(r"\b" + re.escape(t) + r"\b", text_lower) for t in query_terms):
             score += 0.15
 
@@ -380,6 +406,9 @@ class RagService:
                 "further dna studies",
                 "denatured froms of hemoglobins",
                 "clinically correlated",
+                "patient is advised",
+                "management of cardiovascular disease",
+                "associated with increased risk",
             ]
         ):
             score -= 0.15
@@ -750,7 +779,7 @@ class RagService:
         matching_line_indices: set[int] = set()
         for idx, l in enumerate(lines):
             if any(re.search(r"\b" + re.escape(t) + r"\b", l, re.I) for t in query_terms):
-                for w in range(max(0, idx - 3), min(len(lines), idx + 8)):
+                for w in range(max(0, idx - 3), min(len(lines), idx + 12)):
                     matching_line_indices.add(w)
 
         if matching_line_indices and len(matching_line_indices) < len(lines):
@@ -1056,11 +1085,12 @@ class RagService:
                 f"Clinical Instructions:\n"
                 f"1. Answer factually using ONLY the facts and values directly stated in the excerpts above.\n"
                 f"2. Cite the specific document name(s) when presenting findings or test values.\n"
-                f"3. Report all reported values for the requested test across each document source with document names, values, units, and reference ranges (do not omit values from other documents).\n"
-                f"4. Preserve all numerical measurements, reference ranges, and units exactly as stated.\n"
-                f"5. If the provided excerpts do not mention or contain any information regarding the question, clearly state that no records or information were found for that question.\n"
-                f"6. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
-                f"7. Provide a clear, comprehensive, and well-structured response."
+                f"3. For panels or multi-parameter lab tests (such as lipid profiles and cholesterol fractions: Total Cholesterol, Triglycerides, HDL, LDL, VLDL, Non-HDL, and cholesterol ratios), report every documented test parameter and value present in EACH excerpt. Do not omit any parameters, values, or ratios that appear in the excerpts.\n"
+                f"4. Report all reported values for the requested test across each document source with document names, values, units, and reference ranges.\n"
+                f"5. Preserve all numerical measurements, reference ranges, and units exactly as stated. Do not guess or substitute values between different tests.\n"
+                f"6. If the provided excerpts do not mention or contain any information regarding the question, clearly state that no records or information were found for that question.\n"
+                f"7. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
+                f"8. Provide a clear, comprehensive, and well-structured response grouped by document or parameter."
             )
 
         # 5. Generate LLM completion

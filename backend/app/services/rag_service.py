@@ -1,5 +1,6 @@
 import logging
 import re
+from typing import Any
 from uuid import UUID
 import numpy as np
 from fastapi import HTTPException, status
@@ -28,8 +29,7 @@ SYSTEM_PROMPT = (
     "You are an expert clinical AI assistant working within a strict healthcare privacy boundary. "
     "Answer questions accurately and factually based ONLY on the provided de-identified document excerpts. "
     "Preserve all numerical values, test results, dosages, and units exactly without alteration. "
-    "Never diagnose, invent facts, or recommend clinical treatments. "
-    "If the information is not contained in the excerpts, state clearly that the document does not contain that information."
+    "Never diagnose, invent facts, or recommend clinical treatments."
 )
 
 
@@ -233,10 +233,9 @@ class RagService:
             f"Strict Instructions:\n"
             f"1. Answer using ONLY the facts and values directly stated in the excerpts above.\n"
             f"2. Preserve all numerical measurements, lab values, percentages, and units exactly without alteration or rounding.\n"
-            f"3. In laboratory reports, note that an isolated 'H' or 'High' flag indicates an abnormally elevated value above reference range, and 'L' or 'Low' indicates a subnormal value below reference range. Qualitative results such as '1+' or 'Present (+)' where normal is 'Negative' or 'Absent' are abnormal.\n"
-            f"4. If the excerpts do not contain the answer, state: 'The provided document excerpts do not contain sufficient information to answer this question.'\n"
-            f"5. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
-            f"6. Provide a clear, concise, and direct response."
+            f"3. If the excerpts do not contain the answer, state: 'The provided document excerpts do not contain sufficient information to answer this question.'\n"
+            f"4. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
+            f"5. Provide a clear, concise, and direct response."
         )
 
         # 6. Execute LLM completion
@@ -244,7 +243,7 @@ class RagService:
             answer = self.llm.generate_text(
                 prompt=prompt,
                 system_prompt=SYSTEM_PROMPT,
-                temperature=0.1,
+                temperature=0.0,
             )
         except LLMConfigurationError as exc:
             logger.error(f"RAG search failed: {exc}")
@@ -305,12 +304,20 @@ class RagService:
         terms = set(cleaned)
         if "hemoglobin" in terms or "hb" in terms:
             terms.update(["hemoglobin", "hb", "haemoglobin"])
-        if "sugar" in terms or "glucose" in terms:
+        if "fasting" in terms and any(w in terms for w in ["sugar", "glucose"]):
+            terms.discard("blood")
+            terms.update(["fasting blood sugar", "fasting glucose", "fbs"])
+        elif "sugar" in terms or "glucose" in terms:
             terms.update(["glucose", "sugar", "fbs"])
         if "platelet" in terms or "platelets" in terms:
             terms.update(["platelet", "platelets"])
         if "wbc" in terms or "leukocyte" in terms:
             terms.update(["wbc", "leukocyte"])
+        if ("blood" in terms and any(w in terms for w in ["type", "group", "typing"])) or "abo" in terms or "rh" in terms:
+            terms.discard("blood")
+            terms.discard("type")
+            terms.discard("group")
+            terms.update(["blood group", "blood type", "abo", "rh", "abo type", "rh (d)"])
 
         return list(terms)
 
@@ -325,12 +332,20 @@ class RagService:
         score = base_sim
 
         has_direct_result = False
+        units_re = r"(?:g/dl|gm/dl|mg/dl|mcg/dl|mmol/l|umol/l|µmol/l|mEq/l|u/l|iu/l|uiu/ml|miu/ml|ng/ml|pg/ml|bpm|°f|°c|mmhg|g%|vol%|cells/ul|/ul|/hpf|ml/min|lakhs/cumm|cumm|/cmm|%|fl|pg)"
         for term in query_terms:
-            pattern_fwd = rf"(?i)\b{re.escape(term)}\b[\s\S]{{0,120}}?\b\d+(?:\.\d+)?\s*(?:g/dl|gm/dl|mg/dl|mcg/dl|mmol/l|umol/l|µmol/l|mEq/l|u/l|iu/l|uiu/ml|miu/ml|ng/ml|pg/ml|bpm|°f|°c|mmhg|g%|vol%|cells/ul|/ul|/hpf|ml/min|lakhs/cumm|cumm|/cmm|%|fl|pg)\b"
-            pattern_rev = rf"(?i)\b\d+(?:\.\d+)?\s*(?:g/dl|gm/dl|mg/dl|mcg/dl|mmol/l|umol/l|µmol/l|mEq/l|u/l|iu/l|uiu/ml|miu/ml|ng/ml|pg/ml|bpm|°f|°c|mmhg|g%|vol%|cells/ul|/ul|/hpf|ml/min|lakhs/cumm|cumm|/cmm|%|fl|pg)\b[\s\S]{{0,120}}?\b{re.escape(term)}\b"
-            if re.search(pattern_fwd, chunk_text) or re.search(pattern_rev, chunk_text):
+            pattern_fwd = rf"(?i)\b{re.escape(term)}\b[\s\S]{{0,120}}?\b\d+(?:\.\d+)?\s*{units_re}\b"
+            pattern_rev = rf"(?i)\b\d+(?:\.\d+)?\s*{units_re}\b[\s\S]{{0,120}}?\b{re.escape(term)}\b"
+            pattern_col = rf"(?i)\b{re.escape(term)}\b[\s\S]{{0,120}}?\b{units_re}\b[\s\S]{{0,100}}?\b\d+(?:\.\d+)?\b"
+            if re.search(pattern_fwd, chunk_text) or re.search(pattern_rev, chunk_text) or re.search(pattern_col, chunk_text):
                 has_direct_result = True
                 break
+
+        # Qualitative blood typing result proximity (e.g. ABO Type: "A", Rh (D) Type: Positive)
+        if not has_direct_result and any(t in query_terms for t in ["blood group", "blood type", "abo", "rh"]):
+            blood_pattern = r"(?i)\b(abo\s+type|blood\s+group|rh\s*\(?d?\)?\s*type)\b[\s\S]{0,80}?\b([\"']?[abio][\"']?|positive|negative|\+|-)\b"
+            if re.search(blood_pattern, chunk_text):
+                has_direct_result = True
 
         if has_direct_result:
             score += 0.40
@@ -350,6 +365,389 @@ class RagService:
             score -= 0.15
 
         return score
+
+    @staticmethod
+    def _extract_patient_findings(
+        db: Session,
+        docs: list[Document],
+    ) -> list[dict[str, Any]]:
+        """
+        Extract structured abnormal / flagged findings directly from sanitized_text
+        for each document, bypassing chunk-based LLM extraction.
+
+        Returns a list of dicts with keys: document, test, value, unit, ref_range, flag.
+        """
+        findings: list[dict[str, Any]] = []
+        # Track (doc_name, normalized_test) to avoid duplicates
+        seen_keys: set[tuple[str, str]] = set()
+
+        def _normalize_test(name: str) -> str:
+            return re.sub(r"[\s,]+", " ", name).strip().lower()
+
+        def _add_finding(doc_name: str, test: str, value: str, unit: str, ref_range: str, flag: str) -> None:
+            # Clean up Presidio artifacts in test names (e.g. [ADDRESS] for 'Dist.')
+            cleaned_test = test.replace("[ADDRESS]", "Dist").strip()
+            # For imaging findings, use value in key so distinct findings aren't dropped
+            if "imaging" in cleaned_test.lower():
+                key = (doc_name, _normalize_test(cleaned_test), _normalize_test(value))
+            else:
+                key = (doc_name, _normalize_test(cleaned_test))
+            if key in seen_keys:
+                return
+            seen_keys.add(key)
+            findings.append({
+                "document": doc_name,
+                "test": cleaned_test,
+                "value": value,
+                "unit": unit,
+                "ref_range": ref_range,
+                "flag": flag,
+            })
+
+        def _parse_range(ref_str: str):
+            """
+            Parse a reference range string into (low, high, kind).
+            Returns None if the format is not unambiguously parseable.
+            kind is one of: 'range', 'lt', 'le', 'gt', 'ge'
+            """
+            ref = ref_str.strip()
+            # Normalize spaces inside numbers, e.g. "6 .0" -> "6.0"
+            ref = re.sub(r"(\d+)\s*\.\s*(\d+)", r"\1.\2", ref)
+            # Strip trailing non-digit units/words like "pH", "Ratio", "%"
+            ref = re.sub(r"\s+[a-zA-Z/%│áÁ]+$", "", ref).strip()
+
+            # Range: "X - Y" or "X-Y" (with optional spaces, allowing decimal)
+            m = re.match(r"^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$", ref)
+            if m:
+                return (float(m.group(1)), float(m.group(2)), "range")
+            # Threshold: "<X" or "< X"
+            m = re.match(r"^<\s*(\d+(?:\.\d+)?)$", ref)
+            if m:
+                return (None, float(m.group(1)), "lt")
+            # Threshold: "<=X"
+            m = re.match(r"^<=\s*(\d+(?:\.\d+)?)$", ref)
+            if m:
+                return (None, float(m.group(1)), "le")
+            # Threshold: ">X" or "> X"
+            m = re.match(r"^>\s*(\d+(?:\.\d+)?)$", ref)
+            if m:
+                return (float(m.group(1)), None, "gt")
+            # Threshold: ">=X"
+            m = re.match(r"^>=\s*(\d+(?:\.\d+)?)$", ref)
+            if m:
+                return (float(m.group(1)), None, "ge")
+            return None
+
+        def _compare_to_range(result_val: float, parsed_range) -> str:
+            """Return 'High', 'Low', or 'Normal' given a parsed range tuple."""
+            low, high, kind = parsed_range
+            if kind == "range":
+                if result_val < low:
+                    return "Low"
+                elif result_val > high:
+                    return "High"
+                else:
+                    return "Normal"
+            elif kind == "lt":
+                return "Normal" if result_val < high else "High"
+            elif kind == "le":
+                return "Normal" if result_val <= high else "High"
+            elif kind == "gt":
+                return "Normal" if result_val > low else "Low"
+            elif kind == "ge":
+                return "Normal" if result_val >= low else "Low"
+            return "Normal"
+
+        # Known method names in HOD / lab tables (used to skip method lines)
+        _METHOD_KEYWORDS = frozenset([
+            "method", "calculated", "enzymatic", "clia", "hplc", "photometric",
+            "impedance", "dye", "flow", "colorimetric", "urease", "uricase",
+            "chromazurol", "pyridylazo", "bromothymol", "nitroprusside",
+            "methoxybenzene", "dichlorobenzene", "tetramethyl", "tetrachloro",
+            "indoxyl", "ethyleneglycol", "glucose-oxidase", "modified",
+            "westergren", "copper", "physical examination", "microscopy",
+            "sf cube", "direct measured", "god-pod", "high performance liquid",
+        ])
+
+        # Table section subheaders in HOD that are not test rows
+        _TABLE_SUBHEADERS = frozenset([
+            "physical examination", "biochemical examination", "microscopic examination",
+            "complete blood count", "lipid profile", "liver function test",
+            "kidney function test", "electrolytes", "iron profile", "thyroid profile",
+            "urine r/m",
+        ])
+
+        def _is_method_line(text: str) -> bool:
+            low = text.lower()
+            return any(kw in low for kw in _METHOD_KEYWORDS)
+
+        # Qualitative normal values that should not be flagged
+        _QUAL_NORMALS = frozenset([
+            "negative", "nil", "absent", "clear", "normal", "non reactive",
+            "non-reactive", "pale yellow",
+        ])
+
+        for doc in docs:
+            dt = (
+                db.query(DocumentText)
+                .filter(DocumentText.document_id == doc.document_id)
+                .first()
+            )
+            if not dt or not dt.sanitized_text:
+                continue
+            text = dt.sanitized_text
+            lines = text.splitlines()
+
+            raw_lines = dt.raw_text.splitlines() if dt.raw_text else []
+
+            # =================================================================
+            # --- 1. Imaging IMPRESSION block (structural capture) ---
+            # =================================================================
+            in_impression = False
+            for line in lines:
+                stripped = line.strip()
+                # Enter impression block on "IMPRESSION" header
+                if re.match(r"(?i)^IMPRESSION\s*:?-?\s*$", stripped):
+                    in_impression = True
+                    continue
+                if in_impression:
+                    # Exit on blank line, patient info, or page markers
+                    if (
+                        not stripped
+                        or stripped.startswith("[PATIENT]")
+                        or "Electronically Authenticated" in stripped
+                        or re.match(r"^(Patient Name|Lab No|Demo Visit|Age / Sex|Registration On)", stripped)
+                    ):
+                        in_impression = False
+                        continue
+                    # Capture each bulleted/dashed finding line
+                    cleaned = re.sub(r"^[-\u2022*]\s*", "", stripped).strip()
+                    if cleaned and len(cleaned) > 2:
+                        _add_finding(
+                            doc.file_name,
+                            "Imaging / Ultrasound",
+                            cleaned,
+                            "",
+                            "Normal",
+                            "Abnormal",
+                        )
+
+            # =================================================================
+            # --- 2. Lab table findings with explicit H / L flags ---
+            # =================================================================
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+
+                # Stand-alone H or L on its own line
+                if re.match(r"^[HL]$", line) and i > 0:
+                    flag = "High (H)" if line == "H" else "Low (L)"
+                    test_name = lines[i - 1].strip()
+                    unit, ref_range, val = "", "", ""
+                    for j in range(i + 1, min(i + 15, len(lines))):
+                        sub = lines[j].strip()
+                        if not sub:
+                            continue
+
+                        # Stop if we hit the next test or section header
+                        if j > i + 1:
+                            if j + 1 < len(lines) and re.match(r"^[HL]$", lines[j + 1].strip()):
+                                break
+                            if sub in [
+                                "HDL Cholesterol", "VLDL", "CHOL/HDL Ratio", "LDL/HDL Ratio",
+                                "Mean Blood Glucose", "Biochemistry", "Summary and Uses:",
+                                "Clinical Notes:", "Interpretation:", "Neutrophils", "Lymphocytes",
+                                "Per[IP_NUMBER] Smear Examination", "Explanation:-", "Blood Urea Nitrogen",
+                                "Uric Acid", "Calcium", "Hb A2"
+                            ]:
+                                break
+
+                        if re.match(
+                            r"^(?:mg/dl|g/dl|gm/dl|micromol/l|iu/ml|pg/ml|%|/cmm|fl|u/l|mmol/l|lakhs/cumm|cumm|/ul|cells/.*)$",
+                            sub,
+                            re.I,
+                        ):
+                            if not unit:
+                                unit = sub
+                        elif re.search(r"\d+\s*-\s*\d+|<|>|normal\s*:", sub, re.I) and not ref_range:
+                            ref_range = sub
+                        elif (re.match(r"^\d+(?:\.\d+)?$", sub) or re.match(r"^<\s*\d+", sub)) and not val:
+                            val = sub
+
+                    # If val was not found (e.g. redacted to [PHONE] in sanitized_text), check raw_lines
+                    if not val and raw_lines:
+                        for r_idx in range(max(0, i - 15), min(len(raw_lines), i + 15)):
+                            if raw_lines[r_idx].strip() == test_name:
+                                for rj in range(r_idx + 1, min(r_idx + 15, len(raw_lines))):
+                                    rsub = raw_lines[rj].strip()
+                                    if rj > r_idx + 1 and (
+                                        (rj + 1 < len(raw_lines) and re.match(r"^[HL]$", raw_lines[rj + 1].strip()))
+                                        or rsub in ["HDL Cholesterol", "VLDL", "CHOL/HDL Ratio", "LDL/HDL Ratio", "Mean Blood Glucose"]
+                                    ):
+                                        break
+                                    if (re.match(r"^\d+(?:\.\d+)?$", rsub) or re.match(r"^<\s*\d+", rsub)) and not val:
+                                        val = rsub
+                                        break
+                                break
+
+                    if test_name and (val or ref_range):
+                        _add_finding(doc.file_name, test_name, val, unit, ref_range, flag)
+
+                # Inline flags (e.g. "MCHC H 35.7 %" or "Fasting Blood Sugar H 142 mg/dL (Reference 74 - 106)")
+                inline_pattern = r"(?:^|[.;\n])\s*([A-Za-z0-9\s,/-]+?)\s+([HL])\s+(\d+(?:\.\d+)?)\s*([a-zA-Z/%]+)?(?:\s*\((?:Reference\s*)?([^)]*)\))?"
+                for inline_m in re.finditer(inline_pattern, line):
+                    tname = inline_m.group(1).strip()
+                    if len(tname) > 2 and not any(w in tname.lower() for w in ["reference", "range", "interval"]):
+                        _add_finding(
+                            doc.file_name,
+                            tname,
+                            inline_m.group(3),
+                            inline_m.group(4) or "",
+                            inline_m.group(5) or "",
+                            "High (H)" if inline_m.group(2).upper() == "H" else "Low (L)",
+                        )
+
+                # Qualitative abnormalities — same-line pattern
+                # (e.g. "Urinary Glucose 1+ Negative" or "Present (+)")
+                # Skip lines that are purely "Non Reactive" / screening negative results
+                if not re.search(r"(?i)^\s*non[-\s]*reactive\b", line):
+                    qual_pattern = r"(?:^|[.;\n])\s*([A-Za-z0-9\s,/-]+?)\s+([1-4]\+|Present\s*\(\+\)|\bPositive\b|\bReactive\b)(?:\s+([A-Za-z]+))?"
+                    for qual_m in re.finditer(qual_pattern, line):
+                        tname = qual_m.group(1).strip()
+                        val = qual_m.group(2).strip()
+                        if val.lower() == "reactive" and (re.search(r"(?i)\bnon[-\s]*reactive\b", line) or tname.lower() in ("non", "non-")):
+                            continue
+                        if len(tname) > 2 and tname.lower() not in ("non", "test", "result", "status", "interpretation"):
+                            ref_val = qual_m.group(3) or "Negative"
+                            _add_finding(doc.file_name, tname, val, "", ref_val, "Abnormal")
+
+                i += 1
+
+            # =================================================================
+            # --- 3. Multi-line qualitative extraction ---
+            # =================================================================
+            i = 0
+            while i < len(lines) - 1:
+                line = lines[i].strip()
+                next_line = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                ref_line = lines[i + 2].strip() if i + 2 < len(lines) else ""
+
+                if (
+                    re.match(r"^[1-4]\+$", next_line)
+                    and len(line) > 2
+                    and line[0].isalpha()
+                    and not re.match(r"^[HL]$", line)
+                    and not re.search(r"\d", line)
+                ):
+                    ref_val = ref_line if ref_line.lower() in _QUAL_NORMALS else "Negative"
+                    if ref_val.lower() in _QUAL_NORMALS and ref_val.lower() != next_line.lower():
+                        _add_finding(doc.file_name, line, next_line, "", ref_val, "Abnormal")
+                    i += 3
+                    continue
+                i += 1
+
+            # =================================================================
+            # --- 4. HOD-style numeric range comparison ---
+            # =================================================================
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+
+                # Detect table header: "Observation" followed by "Result"
+                if (
+                    line == "Observation"
+                    and i + 4 < len(lines)
+                    and lines[i + 1].strip() == "Result"
+                ):
+                    j = i + 5  # skip 5-line header (Observation/Result/Unit/Bio Ref/Method)
+                    while j < len(lines):
+                        tname = lines[j].strip()
+
+                        # Skip subheaders within the table (e.g. Biochemical Examination)
+                        if tname.lower() in _TABLE_SUBHEADERS:
+                            j += 1
+                            continue
+
+                        # Exit conditions
+                        if (
+                            not tname
+                            or tname.startswith("---")
+                            or tname in [
+                                "Patient Name :", "Observation", "Clinical Significance:",
+                                "Scan to Validate", "[PATIENT]:", "[PATIENT] :",
+                            ]
+                            or tname.startswith("[PATIENT]")
+                        ):
+                            break
+
+                        # Read the next 3 lines: result, unit, ref
+                        if j + 3 < len(lines):
+                            result_str = lines[j + 1].strip()
+                            unit_str = lines[j + 2].strip()
+                            ref_str = lines[j + 3].strip()
+
+                            # Skip method line if line j+4 looks like a method
+                            consumed = 4
+                            if j + 4 < len(lines) and _is_method_line(lines[j + 4].strip()):
+                                consumed = 5
+
+                            # Determine if result is numeric
+                            result_numeric = re.match(r"^-?\d+(?:\.\d+)?$", result_str)
+
+                            if result_numeric:
+                                result_val = float(result_str)
+                                parsed = _parse_range(ref_str)
+                                if parsed:
+                                    classification = _compare_to_range(result_val, parsed)
+                                    if classification != "Normal":
+                                        flag_str = f"High" if classification == "High" else f"Low"
+                                        _add_finding(
+                                            doc.file_name, tname, result_str, unit_str,
+                                            ref_str, flag_str,
+                                        )
+
+                            elif result_str.lower() in ("1+", "2+", "3+", "4+"):
+                                actual_ref = unit_str if unit_str.lower() in _QUAL_NORMALS else ref_str
+                                if actual_ref.lower() in _QUAL_NORMALS:
+                                    _add_finding(doc.file_name, tname, result_str, "", actual_ref, "Abnormal")
+
+                            j += consumed
+                            continue
+                        j += 1
+                    i = j
+                else:
+                    i += 1
+
+        return findings
+
+    @staticmethod
+    def _format_narrow_chunk_excerpt(chunk_text: str, query_terms: list[str]) -> str:
+        """
+        For narrow factual queries, extracts a window around the lines matching query terms,
+        preventing 7B models from losing focus due to thousands of unrelated characters.
+        """
+        lines = chunk_text.splitlines()
+        matching_line_indices: set[int] = set()
+        for idx, l in enumerate(lines):
+            if any(re.search(r"\b" + re.escape(t) + r"\b", l, re.I) for t in query_terms):
+                for w in range(max(0, idx - 3), min(len(lines), idx + 8)):
+                    matching_line_indices.add(w)
+
+        if matching_line_indices and len(matching_line_indices) < len(lines):
+            sorted_indices = sorted(matching_line_indices)
+            blocks: list[str] = []
+            cur_block: list[str] = []
+            prev_idx: int | None = None
+            for i in sorted_indices:
+                if prev_idx is not None and i > prev_idx + 1:
+                    blocks.append("\n".join(cur_block))
+                    cur_block = []
+                cur_block.append(lines[i])
+                prev_idx = i
+            if cur_block:
+                blocks.append("\n".join(cur_block))
+            return "\n...\n".join(blocks)
+        return chunk_text
 
     def search_patient(
         self,
@@ -375,6 +773,7 @@ class RagService:
                 Document.patient_id == patient_id,
                 Document.privacy_status == "completed",
             )
+            .order_by(Document.file_name)
             .all()
         )
 
@@ -470,24 +869,22 @@ class RagService:
                 if scored:
                     doc_candidates[doc.document_id] = scored
 
-            # Guarantee representation from each document with matching terms or notable similarity
+            # Phase 1: Guarantee representation from each document with matching terms or notable similarity
             chosen: list[tuple[DocumentChunk, float]] = []
             for doc_id, scored in doc_candidates.items():
                 best_c, best_score, best_sim = scored[0]
                 if best_score > 0.25 or any(kw in best_c.chunk_text.lower() for kw in query_terms):
                     chosen.append((best_c, best_sim))
 
-            # Fill remaining slots up to top_k with top runner-ups across documents
-            all_runner_ups = []
-            for doc_id, scored in doc_candidates.items():
-                for c, sc, sim in scored[1:3]:
-                    all_runner_ups.append((c, sc, sim))
-            all_runner_ups.sort(key=lambda x: x[1], reverse=True)
-
-            for c, sc, sim in all_runner_ups:
-                if len(chosen) >= max(top_k, len(chosen)):
-                    break
-                if not any(x[0].chunk_id == c.chunk_id for x in chosen):
+            # Phase 2: Runner-up padding only fires when Phase 1 did NOT already select a relevant chunk
+            # for every document that has one (i.e. don't pad past what's needed just to hit top_k=5).
+            if not chosen:
+                all_runner_ups = []
+                for doc_id, scored in doc_candidates.items():
+                    for c, sc, sim in scored[:2]:
+                        all_runner_ups.append((c, sc, sim))
+                all_runner_ups.sort(key=lambda x: x[1], reverse=True)
+                for c, sc, sim in all_runner_ups[:top_k]:
                     chosen.append((c, sim))
 
             selected_chunks_with_scores = chosen
@@ -526,32 +923,74 @@ class RagService:
                 )
             )
             page_str = f", Page {chunk.page_number}" if chunk.page_number else ""
+            if q_type == "NARROW_FACTUAL":
+                q_terms = self._extract_query_keywords(query)
+                text_to_show = self._format_narrow_chunk_excerpt(chunk.chunk_text, q_terms)
+            else:
+                text_to_show = chunk.chunk_text
             context_blocks.append(
-                f"[Excerpt {idx} - Document: {doc_name}{page_str} (Chunk #{chunk.chunk_index})]:\n{chunk.chunk_text}"
+                f"[Excerpt {idx} - Document: {doc_name}{page_str} (Chunk #{chunk.chunk_index})]:\n{text_to_show}"
             )
 
         context_text = "\n\n".join(context_blocks)
-        prompt = (
-            f"You are an expert clinical AI assistant answering a question based strictly on excerpts from a patient's de-identified medical records.\n\n"
-            f"Patient Record Excerpts:\n\"\"\"\n{context_text}\n\"\"\"\n\n"
-            f"User Question: {query}\n\n"
-            f"Clinical Instructions:\n"
-            f"1. Answer factually using ONLY the facts and values directly stated in the excerpts above.\n"
-            f"2. Cite the specific document name(s) when presenting findings or test values.\n"
-            f"3. In laboratory reports, note that an isolated 'H' or 'High' flag indicates an abnormally elevated value above reference range, and 'L' or 'Low' indicates a subnormal value below reference range. Qualitative results such as '1+' or 'Present (+)' where normal is 'Negative' or 'Absent' are abnormal.\n"
-            f"4. If relevant values or findings appear across multiple documents, report all reported values with their respective document sources and units (do not omit values from other documents).\n"
-            f"5. Preserve all numerical measurements, reference ranges, and units exactly as stated.\n"
-            f"6. If the provided excerpts do not mention or contain any information regarding the question, clearly state that no records or information were found for that question.\n"
-            f"7. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
-            f"8. Provide a clear, comprehensive, and well-structured response."
-        )
+
+        # For comprehensive abnormal / flagged queries, build structured findings context
+        findings_context = ""
+        if q_type == "COMPREHENSIVE_ABNORMAL":
+            raw_findings = self._extract_patient_findings(db, docs)
+            if re.search(r"(?i)\bh-?flag(?:ged|s)?\b", query):
+                relevant_findings = [f for f in raw_findings if "High" in f.get("flag", "")]
+            elif re.search(r"(?i)\bl-?flag(?:ged|s)?\b", query):
+                relevant_findings = [f for f in raw_findings if "Low" in f.get("flag", "")]
+            else:
+                relevant_findings = raw_findings
+
+            if relevant_findings:
+                by_doc: dict[str, list[str]] = {}
+                for f in relevant_findings:
+                    val_str = f"{f['value']} {f['unit']}".strip() if f.get("value") else ""
+                    ref_str = f" (Reference: {f['ref_range']})" if f.get("ref_range") else ""
+                    by_doc.setdefault(f["document"], []).append(
+                        f"- {f['test']}: {val_str}{ref_str} [Flag: {f['flag']}]"
+                    )
+                sections = []
+                for dname, items in by_doc.items():
+                    sections.append(f"Document: [{dname}]\n" + "\n".join(items))
+                findings_context = "\n\n".join(sections)
+
+        if findings_context:
+            prompt = (
+                f"You are an expert clinical AI assistant reviewing a patient's documented medical records.\n\n"
+                f"User Question: {query}\n\n"
+                f"Documented Findings from Patient Records:\n\"\"\"\n{findings_context}\n\"\"\"\n\n"
+                f"Clinical Instructions:\n"
+                f"1. List EVERY SINGLE documented finding from the list above without omitting, summarizing, or truncating any tests. Every finding in the input must appear in your output.\n"
+                f"2. Group findings strictly by document name.\n"
+                f"3. State all test names, numerical values, units, reference ranges, and flags exactly as listed.\n"
+                f"4. Do NOT invent findings or speculate.\n"
+                f"5. If no findings match the question, state that clearly."
+            )
+        else:
+            prompt = (
+                f"You are an expert clinical AI assistant answering a question based strictly on excerpts from a patient's de-identified medical records.\n\n"
+                f"User Question: {query}\n\n"
+                f"Patient Record Excerpts:\n\"\"\"\n{context_text}\n\"\"\"\n\n"
+                f"Clinical Instructions:\n"
+                f"1. Answer factually using ONLY the facts and values directly stated in the excerpts above.\n"
+                f"2. Cite the specific document name(s) when presenting findings or test values.\n"
+                f"3. Report all reported values for the requested test across each document source with document names, values, units, and reference ranges (do not omit values from other documents).\n"
+                f"4. Preserve all numerical measurements, reference ranges, and units exactly as stated.\n"
+                f"5. If the provided excerpts do not mention or contain any information regarding the question, clearly state that no records or information were found for that question.\n"
+                f"6. Do NOT diagnose, recommend clinical treatments, or speculate beyond the provided text.\n"
+                f"7. Provide a clear, comprehensive, and well-structured response."
+            )
 
         # 5. Generate LLM completion
         try:
             answer = self.llm.generate_text(
                 prompt=prompt,
                 system_prompt=SYSTEM_PROMPT,
-                temperature=0.1,
+                temperature=0.0,
             )
         except LLMConfigurationError as exc:
             logger.error(f"Patient RAG search failed: {exc}")

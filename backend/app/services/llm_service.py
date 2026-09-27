@@ -78,7 +78,7 @@ class LLMService:
         self,
         messages: list[dict[str, str]],
         response_format: dict[str, str] | None = None,
-        temperature: float = 0.1,
+        temperature: float = 0.0,
     ) -> str:
         """
         Internal completion executor handling client initialization,
@@ -141,7 +141,7 @@ class LLMService:
         self,
         prompt: str,
         system_prompt: str | None = None,
-        temperature: float = 0.1,
+        temperature: float = 0.0,
     ) -> str:
         """
         Generate free-form text response (e.g., for RAG Q&A).
@@ -176,7 +176,7 @@ class LLMService:
         raw_content = self._execute_completion(
             messages=messages,
             response_format={"type": "json_object"},
-            temperature=0.1,
+            temperature=0.0,
         )
 
         try:

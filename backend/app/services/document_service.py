@@ -330,9 +330,27 @@ def delete_document(
         )
 
 
-    # Attempt to remove the uploaded file from disk safely
+    # Remember the file path before we touch the DB, but delete file only after commit succeeds.
+    file_path: Path | None = None
     if document.file_url:
         file_path = Path(document.file_url)
+
+    # Database delete — ORM cascade removes document_text, document_entities, document_chunks
+    try:
+        db.delete(document)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            f"Failed to delete document {document_id} from database: {exc}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete document",
+        ) from exc
+
+    # Attempt to remove the uploaded file from disk; failure is non-fatal
+    if file_path is not None:
         try:
             if file_path.exists():
                 file_path.unlink()
@@ -340,10 +358,6 @@ def delete_document(
             logger.warning(
                 f"Could not delete file {file_path} for document {document_id}: {exc}"
             )
-
-    # Database delete — cascades to document_text, document_entities, document_chunks
-    db.delete(document)
-    db.commit()
 
 
 def get_chunk_source(

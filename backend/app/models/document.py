@@ -107,6 +107,7 @@ class Document(Base):
         "DocumentText",
         back_populates="document",
         uselist=False,
+        cascade="all, delete-orphan",
     )
 
     entities: Mapped[list["DocumentEntity"]] = relationship(  # noqa: F821

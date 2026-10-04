@@ -175,4 +175,84 @@ def test_background_task_creates_own_db_session(
         assert doc_text is not None
         assert doc_text.raw_text == "Background session text"
     finally:
-        check_db.close()
+        check_db.close()
+
+
+def test_delete_document_cascades_children(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    tmp_path: Path,
+    database,
+    monkeypatch,
+) -> None:
+    """DELETE /documents/{id} must remove the document and all child rows without IntegrityError."""
+    from uuid import UUID
+    from app.models.document import Document
+    from app.models.document_text import DocumentText
+    from app.models.document_entity import DocumentEntity
+    from app.models.document_chunk import DocumentChunk
+
+    monkeypatch.setattr(document_service, "UPLOAD_DIR", tmp_path)
+    monkeypatch.setattr(
+        document_service,
+        "extract_text",
+        lambda file_path, file_type: OCRResult(
+            raw_text="Cascade test OCR",
+            page_count=1,
+            confidence=1.0,
+            ocr_engine="pymupdf-native",
+            processing_time_ms=1,
+            layout={"pages": 1, "tables_detected": 0, "page_confidences": [], "word_confidences": None},
+        ),
+    )
+
+    # 1. Upload a document so DB + background processing create child rows
+    upload_resp = client.post(
+        "/api/v1/documents",
+        headers=auth_headers,
+        files={"file": ("cascade.pdf", b"pdf-bytes", "application/pdf")},
+    )
+    assert upload_resp.status_code == 201
+    doc_id = UUID(upload_resp.json()["document_id"])
+
+    # 2. Manually insert an entity and chunk child row so we test all three tables
+    db = database()
+    try:
+        entity = DocumentEntity(
+            document_id=doc_id,
+            text="Test Entity",
+            label="MEDICATION",
+            confidence=0.99,
+        )
+        chunk = DocumentChunk(
+            document_id=doc_id,
+            chunk_index=0,
+            chunk_text="Test chunk",
+        )
+        db.add_all([entity, chunk])
+        db.commit()
+    finally:
+        db.close()
+
+    # 3. Delete the document via API
+    delete_resp = client.delete(f"/api/v1/documents/{doc_id}", headers=auth_headers)
+    assert delete_resp.status_code == 204
+
+    # 4. Confirm the document and all children are gone
+    check_db = database()
+    try:
+        assert check_db.query(Document).filter(Document.document_id == doc_id).first() is None, \
+            "Document row should be deleted"
+        assert check_db.query(DocumentText).filter(DocumentText.document_id == doc_id).first() is None, \
+            "DocumentText child should be cascade-deleted"
+        assert check_db.query(DocumentEntity).filter(DocumentEntity.document_id == doc_id).first() is None, \
+            "DocumentEntity child should be cascade-deleted"
+        assert check_db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).first() is None, \
+            "DocumentChunk child should be cascade-deleted"
+    finally:
+        check_db.close()
+
+    # 5. Confirm 404 on subsequent fetch
+    fetch_resp = client.get(f"/api/v1/documents/{doc_id}", headers=auth_headers)
+    assert fetch_resp.status_code == 404
+

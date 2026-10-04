@@ -6,7 +6,6 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import DocumentsPage from "./pages/DocumentsPage";
-import UploadPage from "./pages/UploadPage";
 import PatientsPage from "./pages/PatientsPage";
 import PatientWorkspacePage from "./pages/PatientWorkspacePage";
 
@@ -46,16 +45,8 @@ export default function App() {
             }
           />
 
-          <Route
-            path="/upload"
-            element={
-              <ProtectedRoute>
-                <AppLayout>
-                  <UploadPage />
-                </AppLayout>
-              </ProtectedRoute>
-            }
-          />
+          {/* /upload is retired — redirect bookmarks to /patients */}
+          <Route path="/upload" element={<Navigate to="/patients" replace />} />
 
           <Route
             path="/patients"
@@ -67,6 +58,8 @@ export default function App() {
               </ProtectedRoute>
             }
           />
+
+
 
           <Route
             path="/patients/:patientId"

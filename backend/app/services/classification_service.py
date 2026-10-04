@@ -22,6 +22,8 @@ from app.services.llm_service import (
 
 logger = logging.getLogger(__name__)
 
+MAX_CLASSIFICATION_CHARS = 4000
+
 SYSTEM_PROMPT = (
     "You are an expert medical document classifier working within a strict clinical privacy boundary. "
     "Classify the supplied de-identified document content accurately. "
@@ -38,22 +40,40 @@ class ClassificationService:
     def __init__(self, llm: LLMService | None = None) -> None:
         self.llm = llm or default_llm_service
 
-    def build_classification_prompt(self, sanitized_text: str) -> str:
+    def build_classification_prompt(
+        self,
+        sanitized_text: str,
+        validation_error: str | None = None,
+    ) -> str:
         types_formatted = "\n".join(f"- {t}" for t in ALLOWED_DOCUMENT_TYPES)
+        retry_section = ""
+        if validation_error:
+            retry_section = (
+                f"\nIMPORTANT: Your previous output failed schema validation with error:\n"
+                f"{validation_error}\n"
+                f"You must strictly correct this and output ONLY the requested JSON structure.\n\n"
+            )
+
         return (
             f"Analyze the following de-identified clinical document text and determine its document type.\n\n"
             f"Supported document types:\n"
             f"{types_formatted}\n\n"
             f"Rules:\n"
-            f"1. Classify ONLY based on the provided document content.\n"
-            f"2. Do not use outside knowledge or assumptions.\n"
+            f"1. Classify ONLY based on the text inside the <document> tags.\n"
+            f"2. Do not use outside knowledge or make assumptions.\n"
             f"3. If the document does not clearly fit into Laboratory Report, Prescription, Discharge Summary, "
             f"Radiology Report, or Insurance Form, choose 'Other'.\n"
             f"4. Provide a classification confidence score as a float between 0.0 and 1.0.\n"
             f"5. Do NOT make medical diagnoses or clinical treatment recommendations.\n"
-            f"6. Return ONLY a JSON object matching this schema:\n"
-            f'{{\n  "document_type": "<one of the supported types>",\n  "classification_confidence": <float between 0.0 and 1.0>\n}}\n\n'
-            f"Document Text:\n\"\"\"\n{sanitized_text}\n\"\"\""
+            f"{retry_section}"
+            f"<document>\n"
+            f"{sanitized_text}\n"
+            f"</document>\n\n"
+            f"CRITICAL: Return ONLY a JSON object with exactly these two keys:\n"
+            f'- "document_type": Must be one of: {", ".join(ALLOWED_DOCUMENT_TYPES)}\n'
+            f'- "classification_confidence": A float between 0.0 and 1.0\n\n'
+            f'Do not include any other keys (such as "Patient", "Diagnosis", etc.). '
+            f'Return ONLY the JSON object with "document_type" and "classification_confidence".'
         )
 
     def classify_document(
@@ -96,50 +116,90 @@ class ClassificationService:
                 truncated=False,
             )
 
-        # 4. Oversized text guard
+        # 4. Truncate classification input to first ~4000 chars of sanitized text
         sanitized_text = doc_text.sanitized_text.strip()
         is_truncated = False
-        if len(sanitized_text) > settings.max_sanitized_text_chars:
+        if len(sanitized_text) > MAX_CLASSIFICATION_CHARS:
             logger.warning(
                 f"Sanitized text for document {document.document_id} exceeded "
-                f"{settings.max_sanitized_text_chars} chars and was truncated for classification."
+                f"{MAX_CLASSIFICATION_CHARS} chars ({len(sanitized_text)} chars) and was truncated for classification."
             )
-            sanitized_text = sanitized_text[: settings.max_sanitized_text_chars]
+            sanitized_text = sanitized_text[:MAX_CLASSIFICATION_CHARS]
             is_truncated = True
 
-        # 5. Build prompt and call LLM
-        prompt = self.build_classification_prompt(sanitized_text)
+        # 5. Build prompt and call LLM (retry once on schema failure)
+        result: ClassificationResult | None = None
+        current_prompt = self.build_classification_prompt(sanitized_text)
 
-        try:
-            result = self.llm.generate_structured(
-                prompt=prompt,
-                response_schema=ClassificationResult,
-                system_prompt=SYSTEM_PROMPT,
+        for attempt in (1, 2):
+            try:
+                result = self.llm.generate_structured(
+                    prompt=current_prompt,
+                    response_schema=ClassificationResult,
+                    system_prompt=SYSTEM_PROMPT,
+                )
+                break
+            except LLMResponseParsingError as parse_err:
+                raw_out = getattr(parse_err, "raw_response", None) or str(parse_err)
+                raw_truncated = raw_out[:300]
+                logger.warning(
+                    f"Classification schema validation failed on attempt {attempt} for document {document.document_id}. "
+                    f"Validation error: {parse_err}. Raw LLM output (truncated): {raw_truncated}"
+                )
+                if attempt == 1:
+                    # Retry once including the validation error in prompt
+                    current_prompt = self.build_classification_prompt(
+                        sanitized_text,
+                        validation_error=str(parse_err),
+                    )
+                else:
+                    # Retry also failed: save fallback and continue without raising 502
+                    logger.warning(
+                        f"Classification schema validation retry failed for document {document.document_id}. "
+                        "Fallback applied: document_type='unknown', classification_confidence=0.0"
+                    )
+                    document.document_type = "unknown"
+                    document.classification_confidence = 0.0
+                    db.commit()
+                    db.refresh(document)
+                    return ClassificationResponse(
+                        document_id=document.document_id,
+                        document_type="unknown",
+                        classification_confidence=0.0,
+                        cached=False,
+                        truncated=is_truncated,
+                    )
+            except LLMConfigurationError as exc:
+                logger.error(f"Classification failed: {exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Document classification service is not configured (missing API key).",
+                ) from exc
+            except LLMTimeoutError as exc:
+                logger.error(f"Classification timed out: {exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail="Document classification request timed out.",
+                ) from exc
+            except LLMServiceError as exc:
+                logger.error(f"Classification provider error: {exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Failed to classify document with AI service.",
+                ) from exc
+
+        if result is None:
+            document.document_type = "unknown"
+            document.classification_confidence = 0.0
+            db.commit()
+            db.refresh(document)
+            return ClassificationResponse(
+                document_id=document.document_id,
+                document_type="unknown",
+                classification_confidence=0.0,
+                cached=False,
+                truncated=is_truncated,
             )
-        except LLMConfigurationError as exc:
-            logger.error(f"Classification failed: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Document classification service is not configured (missing API key).",
-            ) from exc
-        except LLMTimeoutError as exc:
-            logger.error(f"Classification timed out: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Document classification request timed out.",
-            ) from exc
-        except LLMResponseParsingError as exc:
-            logger.error(f"Classification parsing failed: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Invalid response received from classification model.",
-            ) from exc
-        except LLMServiceError as exc:
-            logger.error(f"Classification provider error: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Failed to classify document with AI service.",
-            ) from exc
 
         # 6. Persist result to database
         document.document_type = result.document_type

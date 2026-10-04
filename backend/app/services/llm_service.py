@@ -32,7 +32,10 @@ class LLMTimeoutError(LLMServiceError):
 
 class LLMResponseParsingError(LLMServiceError):
     """Raised when the LLM returns invalid JSON or fails schema validation."""
-    pass
+
+    def __init__(self, message: str, raw_response: str | None = None) -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
 
 
 class LLMService:
@@ -173,23 +176,49 @@ class LLMService:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        raw_content = self._execute_completion(
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        )
+        # Attempt structured output mode (json_schema) using the response schema if supported
+        schema = response_schema.model_json_schema()
+        if "additionalProperties" not in schema:
+            schema["additionalProperties"] = False
+
+        json_schema_format: dict[str, Any] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_schema.__name__,
+                "strict": True,
+                "schema": schema,
+            },
+        }
+
+        try:
+            raw_content = self._execute_completion(
+                messages=messages,
+                response_format=json_schema_format,
+                temperature=0.0,
+            )
+        except (LLMServiceError, Exception) as exc:
+            if isinstance(exc, (LLMConfigurationError, LLMTimeoutError)):
+                raise
+            logger.warning(
+                f"Structured JSON schema mode failed or unsupported ({exc}); falling back to json_object format."
+            )
+            raw_content = self._execute_completion(
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.0,
+            )
 
         try:
             parsed_json = json.loads(raw_content)
         except json.JSONDecodeError as exc:
             logger.error("Failed to decode JSON from LLM response")
-            raise LLMResponseParsingError("LLM response is not valid JSON") from exc
+            raise LLMResponseParsingError("LLM response is not valid JSON", raw_response=raw_content) from exc
 
         try:
             validated_result = response_schema.model_validate(parsed_json)
         except ValidationError as exc:
             logger.error(f"Schema validation failed for LLM response against {response_schema.__name__}")
-            raise LLMResponseParsingError(f"LLM output failed schema validation: {exc}") from exc
+            raise LLMResponseParsingError(f"LLM output failed schema validation: {exc}", raw_response=raw_content) from exc
 
         logger.info(f"Successfully validated structured response for {response_schema.__name__}")
         return validated_result

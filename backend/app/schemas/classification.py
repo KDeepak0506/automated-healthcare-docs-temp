@@ -13,6 +13,8 @@ ALLOWED_DOCUMENT_TYPES = [
 
 class ClassificationResult(BaseModel):
     """Structured LLM output validation schema for M3 Document Type Identification."""
+    model_config = ConfigDict(extra="forbid")
+
     document_type: str = Field(..., description="Identified healthcare document category")
     classification_confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score between 0.0 and 1.0")
 

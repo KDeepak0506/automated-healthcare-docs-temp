@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from app.db.session import engine
-from app.routers import auth, document, patient
+from app.routers import auth, document, patient, user
 
 
 app = FastAPI(
@@ -46,5 +46,10 @@ app.include_router(
 
 app.include_router(
     document.router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    user.router,
     prefix="/api/v1",
 )

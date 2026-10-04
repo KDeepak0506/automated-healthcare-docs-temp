@@ -9,6 +9,7 @@ from app.models.user import User
 from app.schemas.patient import (
     PaginatedPatientResponse,
     PatientAssignmentCreate,
+    PatientAssignmentResponse,
     PatientCreate,
     PatientResponse,
     PatientUpdate,
@@ -19,6 +20,8 @@ from app.services.patient_service import (
     assign_patient_to_user,
     create_patient,
     list_accessible_patients,
+    list_patient_assignments,
+    unassign_patient_from_user,
     update_patient,
     verify_patient_access,
 )
@@ -141,6 +144,41 @@ def assign_patient_endpoint(
         "user_id": assignment.user_id,
         "patient_id": assignment.patient_id,
     }
+
+
+@router.get(
+    "/{patient_id}/assignments",
+    response_model=list[PatientAssignmentResponse],
+    dependencies=[Depends(require_roles(UserRole.ADMIN.value, UserRole.RECORDS_STAFF.value))],
+)
+def get_patient_assignments_endpoint(
+    patient_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List all care team assignments for a patient. Restricted to Admin or Records Staff."""
+    return list_patient_assignments(db=db, patient_id=patient_id)
+
+
+@router.delete(
+    "/{patient_id}/assign/{user_id}",
+    status_code=http_status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles(UserRole.ADMIN.value, UserRole.RECORDS_STAFF.value))],
+)
+def unassign_patient_endpoint(
+    patient_id: UUID,
+    user_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Unassign a user from a patient. Restricted to Admin or Records Staff."""
+    unassign_patient_from_user(
+        db=db,
+        patient_id=patient_id,
+        target_user_id=user_id,
+        assigner=current_user,
+    )
+    return None
 
 
 @router.post(

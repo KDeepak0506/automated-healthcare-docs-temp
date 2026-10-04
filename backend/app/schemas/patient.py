@@ -20,8 +20,24 @@ class PatientUpdate(BaseModel):
     gender: str | None = None
 
 
+from app.schemas.user import UserResponse
+
+
 class PatientAssignmentCreate(BaseModel):
     user_id: UUID
+
+
+class PatientAssignmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    assignment_id: UUID
+    user_id: UUID
+    patient_id: UUID
+    assigned_at: datetime
+    name: str | None = None
+    email: str | None = None
+    role: str | None = None
+    user: UserResponse | None = None
 
 
 class PatientResponse(BaseModel):

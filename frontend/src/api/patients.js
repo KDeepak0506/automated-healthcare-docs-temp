@@ -25,6 +25,22 @@ export async function assignPatient(patientId, userId) {
   return response.data;
 }
 
+export async function unassignPatient(patientId, userId) {
+  const response = await client.delete(`/patients/${patientId}/assign/${userId}`);
+  return response.data;
+}
+
+export async function listAssignments(patientId) {
+  const response = await client.get(`/patients/${patientId}/assignments`);
+  return response.data;
+}
+
+export async function listUsers(role) {
+  const params = role ? { role } : {};
+  const response = await client.get("/users", { params });
+  return response.data;
+}
+
 export async function searchPatientAI(patientId, query, topK = 5) {
   const response = await client.post(`/patients/${patientId}/search`, {
     query,

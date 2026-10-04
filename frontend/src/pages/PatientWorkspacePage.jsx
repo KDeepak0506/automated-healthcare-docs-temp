@@ -13,6 +13,7 @@ import { getPatient } from "../api/patients";
 import { listDocuments, uploadDocument, getDocumentStatus, getChunkSource } from "../api/documents";
 import { searchPatientAI } from "../api/patients";
 import Toast from "../components/Toast";
+import CareTeamPanel from "../components/CareTeamPanel";
 
 /* ─────────────────── helpers ─────────────────── */
 const POLL_INTERVAL_MS = 4000;
@@ -666,6 +667,9 @@ export default function PatientWorkspacePage() {
           <span>{uploading ? "Uploading…" : "Upload Document"}</span>
         </button>
       </div>
+
+      {/* ── Care Team Panel ── */}
+      <CareTeamPanel patientId={patientId} />
 
       {/* ── Split Panel ── */}
       <div

@@ -253,10 +253,16 @@ def list_documents(
             .filter(PatientAssignment.user_id == user_id)
             .scalar_subquery()
         )
-        query = query.filter(
-            (Document.uploaded_by == user_id)
-            | (Document.patient_id.in_(assigned_patient_ids))
-        )
+        if user.role == UserRole.NURSE.value:
+            query = query.filter(
+                (Document.patient_id.in_(assigned_patient_ids))
+                | ((Document.uploaded_by == user_id) & (Document.patient_id.is_(None)))
+            )
+        else:
+            query = query.filter(
+                (Document.uploaded_by == user_id)
+                | (Document.patient_id.in_(assigned_patient_ids))
+            )
     elif not user:
         query = query.filter(Document.uploaded_by == user_id)
 

@@ -350,3 +350,83 @@ def test_unassign_nonexistent_returns_404(client: TestClient) -> None:
         headers=staff_headers,
     )
     assert res.status_code == 404
+
+
+def test_unassigned_nurse_document_access_revoked(client: TestClient, monkeypatch, tmp_path: Path) -> None:
+    """Nurse uploads for an assigned patient, is unassigned, then gets 403 on GET /documents/{id}, /text, /summarize, and document is absent from GET /documents."""
+    _mock_ocr(monkeypatch, tmp_path)
+
+    _, staff_headers = _register_and_login(client, "Staff Member", "staff_doc_revoke@hospital.org", "records_staff")
+    patient = _create_patient(client, staff_headers, "MRN-DOC-REVOKE-2")
+
+    nurse, nurse_headers = _register_and_login(client, "Nurse Seven", "nurse7@hospital.org", "nurse")
+
+    # Assign nurse
+    client.post(
+        f"/api/v1/patients/{patient['patient_id']}/assign",
+        headers=staff_headers,
+        json={"user_id": nurse["user_id"]},
+    )
+
+    # Nurse uploads document for assigned patient
+    upload_res = client.post(
+        "/api/v1/documents",
+        headers=nurse_headers,
+        files={"file": ("vital_signs.pdf", b"%PDF-1.4 vital signs content", "application/pdf")},
+        data={"patient_id": patient["patient_id"]},
+    )
+    assert upload_res.status_code == 201
+    doc_id = upload_res.json()["document_id"]
+
+    # While assigned, nurse can access document details, text, and list
+    assert client.get(f"/api/v1/documents/{doc_id}", headers=nurse_headers).status_code == 200
+    assert client.get(f"/api/v1/documents/{doc_id}/text", headers=nurse_headers).status_code == 200
+    list_before = client.get("/api/v1/documents", headers=nurse_headers)
+    assert list_before.status_code == 200
+    assert any(d["document_id"] == doc_id for d in list_before.json()["items"])
+
+    # Unassign nurse
+    unassign_res = client.delete(
+        f"/api/v1/patients/{patient['patient_id']}/assign/{nurse['user_id']}",
+        headers=staff_headers,
+    )
+    assert unassign_res.status_code == 204
+
+    # Now unassigned: nurse gets 403 on GET /documents/{id}
+    assert client.get(f"/api/v1/documents/{doc_id}", headers=nurse_headers).status_code == 403
+
+    # Nurse gets 403 on GET /documents/{id}/text
+    assert client.get(f"/api/v1/documents/{doc_id}/text", headers=nurse_headers).status_code == 403
+
+    # Nurse gets 403 on POST /documents/{id}/summarize
+    assert client.post(f"/api/v1/documents/{doc_id}/summarize", headers=nurse_headers).status_code == 403
+
+    # Document is absent from GET /documents listing
+    list_after = client.get("/api/v1/documents", headers=nurse_headers)
+    assert list_after.status_code == 200
+    assert not any(d["document_id"] == doc_id for d in list_after.json()["items"])
+
+
+def test_nurse_standalone_document_access_preserved(client: TestClient, monkeypatch, tmp_path: Path) -> None:
+    """Nurse retains access to documents uploaded with no patient_id."""
+    _mock_ocr(monkeypatch, tmp_path)
+
+    _, nurse_headers = _register_and_login(client, "Nurse Standalone", "nurse_standalone@hospital.org", "nurse")
+
+    # Upload document with no patient_id
+    upload_res = client.post(
+        "/api/v1/documents",
+        headers=nurse_headers,
+        files={"file": ("standalone.pdf", b"%PDF-1.4 standalone", "application/pdf")},
+    )
+    assert upload_res.status_code == 201
+    doc_id = upload_res.json()["document_id"]
+
+    # Nurse can access standalone document
+    assert client.get(f"/api/v1/documents/{doc_id}", headers=nurse_headers).status_code == 200
+    assert client.get(f"/api/v1/documents/{doc_id}/text", headers=nurse_headers).status_code == 200
+
+    # Standalone document is present in listing
+    list_res = client.get("/api/v1/documents", headers=nurse_headers)
+    assert list_res.status_code == 200
+    assert any(d["document_id"] == doc_id for d in list_res.json()["items"])

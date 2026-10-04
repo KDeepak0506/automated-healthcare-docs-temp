@@ -54,14 +54,20 @@ def has_document_access(db: Session, user: User, document: Document) -> bool:
     """
     Check access permission for a document.
     User is authorized if:
-    1. User is document uploader
-    2. User is Admin
-    3. Document belongs to a patient and user has patient access
+    1. User is Admin
+    2. For role nurse: if document belongs to a patient, requires patient access (assignment).
+       Uploader shortcut is only retained for documents with no patient_id.
+    3. For other roles: User is document uploader or has patient access.
     """
-    if document.uploaded_by == user.user_id:
+    if user.role == UserRole.ADMIN.value:
         return True
 
-    if user.role == UserRole.ADMIN.value:
+    if user.role == UserRole.NURSE.value:
+        if document.patient_id is not None:
+            return has_patient_access(db, user, document.patient_id)
+        return document.uploaded_by == user.user_id
+
+    if document.uploaded_by == user.user_id:
         return True
 
     if document.patient_id is not None:

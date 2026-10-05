@@ -33,10 +33,32 @@ client.interceptors.response.use(
       if (status === 401) {
         tokenStore.clear();
       }
+      const code =
+        apiError?.code ||
+        body?.code ||
+        (typeof body?.detail === "object" ? body?.detail?.code : null) ||
+        "UNKNOWN_ERROR";
+      const message =
+        apiError?.message ||
+        body?.message ||
+        (typeof body?.detail === "string" ? body?.detail : body?.detail?.message) ||
+        "Something went wrong. Please try again.";
+      const detected_patient_name =
+        body?.detected_patient_name ||
+        (typeof body?.detail === "object" ? body?.detail?.detected_patient_name : null) ||
+        null;
+      const target_patient_name =
+        body?.target_patient_name ||
+        (typeof body?.detail === "object" ? body?.detail?.target_patient_name : null) ||
+        null;
+
       return Promise.reject({
         status,
-        code: apiError?.code || "UNKNOWN_ERROR",
-        message: apiError?.message || "Something went wrong. Please try again.",
+        code,
+        message,
+        detected_patient_name,
+        target_patient_name,
+        data: body,
       });
     }
     if (error.request) {

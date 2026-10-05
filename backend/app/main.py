@@ -11,6 +11,9 @@ app = FastAPI(
 )
 
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi import Request
+from app.services.patient_identity_service import PatientIdentityMismatchError
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,6 +22,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(PatientIdentityMismatchError)
+async def patient_identity_mismatch_handler(request: Request, exc: PatientIdentityMismatchError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "code": exc.code,
+            "message": exc.error_message,
+            "detail": exc.error_message,
+            "detected_patient_name": exc.detected_patient_name,
+            "target_patient_name": exc.target_patient_name,
+            "detected_mrn": exc.detected_mrn,
+            "target_mrn": exc.target_mrn,
+        },
+    )
 
 
 @app.get("/api/v1/health")

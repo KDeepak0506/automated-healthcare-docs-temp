@@ -8,6 +8,7 @@ import {
   searchDocument,
   getChunkSource,
 } from "../api/documents";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 
 const LABEL_COLORS = {
@@ -456,9 +457,9 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
 
                 {summary ? (
                   <div>
-                    <p style={{ margin: "0 0 16px 0", fontSize: "0.9375rem", lineHeight: "1.6", color: "#1e293b" }}>
-                      {summary}
-                    </p>
+                    <div style={{ marginBottom: 16 }}>
+                      <MarkdownRenderer content={summary} />
+                    </div>
 
                     {keyFindings && keyFindings.length > 0 && (
                       <div>
@@ -748,9 +749,9 @@ export default function ClinicalEntitiesModal({ document, onClose, onDocumentUpd
                         Grounded AI Answer
                       </span>
                     </div>
-                    <p style={{ margin: 0, fontSize: "0.9375rem", lineHeight: "1.6", color: "#0f172a", whiteSpace: "pre-wrap" }}>
-                      {ragAnswer}
-                    </p>
+                    <div style={{ margin: 0, fontSize: "0.9375rem", lineHeight: "1.6", color: "#0f172a" }}>
+                      <MarkdownRenderer content={ragAnswer} />
+                    </div>
                   </div>
 
                   {/* Sources Section */}

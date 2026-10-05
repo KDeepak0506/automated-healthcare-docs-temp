@@ -53,7 +53,13 @@ export default function UploadForm({ onUploaded, onError, patientId = null, pati
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
     } catch (err) {
-      const msg = err.message || "Upload failed. Please try again.";
+      let msg = err.message || "Upload failed. Please try again.";
+      if (err.code === "PATIENT_IDENTITY_MISMATCH") {
+        const target = patientName || "this patient";
+        if (err.detected_patient_name) {
+          msg = `This document appears to belong to ${err.detected_patient_name}, but you are currently in ${target}'s patient workspace. Please verify the patient before uploading.`;
+        }
+      }
       setError(msg);
       onError?.(msg);
     } finally {

@@ -1,14 +1,16 @@
 import logging
 import math
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import BackgroundTasks, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.user import User
+from app.models.patient import Patient
 from app.models.document import Document
 from app.models.document_chunk import DocumentChunk
 from app.models.document_text import DocumentText
@@ -18,6 +20,10 @@ from app.schemas.document import DocumentProcessingStatus
 from app.services.ocr_service import OCRResult, extract_text
 from app.services.privacy_service import privacy_service
 from app.services.ner_service import clinical_ner_service
+from app.services.patient_identity_service import (
+    PatientIdentityMismatchError,
+    validate_document_patient_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +40,12 @@ def _run_ocr_and_store(
     document_id: UUID,
     file_path: Path,
     file_type: str,
+    precomputed_ocr_result: OCRResult | None = None,
 ) -> None:
     """Internal background task to run OCR, Privacy, M4 NER, M3 Classification, M5 Summary, and M6 Indexing."""
     db = SessionLocal()
     try:
-        ocr_result = extract_text(file_path, file_type)
+        ocr_result = precomputed_ocr_result or extract_text(file_path, file_type)
         doc_text = store_ocr_result(db, document_id, ocr_result)
 
         document = db.query(Document).filter(Document.document_id == document_id).first()
@@ -114,9 +121,88 @@ def upload_document(
     # 2. Make sure upload directory exists
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+    file_extension = Path(file.filename).suffix
+
+    # If uploading for a specific patient, run identity validation first
+    precomputed_ocr_result: OCRResult | None = None
+    if patient_id is not None:
+        target_patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+        if not target_patient:
+            raise HTTPException(
+                status_code=404,
+                detail="Patient not found",
+            )
+
+        # Write to temporary file for OCR extraction and identity validation
+        temp_file_path = UPLOAD_DIR / f"temp_{uuid4()}{file_extension}"
+        try:
+            with temp_file_path.open("wb") as buffer:
+                while chunk := file.file.read(1024 * 1024):
+                    buffer.write(chunk)
+        except Exception:
+            if temp_file_path.exists():
+                temp_file_path.unlink()
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to save uploaded file",
+            )
+
+        try:
+            # Extract OCR text using existing OCR pipeline
+            precomputed_ocr_result = extract_text(temp_file_path, file.content_type)
+            # Validate patient identity against target patient
+            validate_document_patient_identity(
+                target_patient=target_patient,
+                raw_text=precomputed_ocr_result.raw_text,
+                filename=file.filename,
+            )
+        except PatientIdentityMismatchError:
+            # Ensure no orphan file remains on identity mismatch
+            if temp_file_path.exists():
+                temp_file_path.unlink()
+            raise
+        except Exception as exc:
+            if temp_file_path.exists():
+                temp_file_path.unlink()
+            raise exc
+
+        # Identity validation passed: persist document record associated with patient
+        document = Document(
+            patient_id=patient_id,
+            uploaded_by=uploaded_by,
+            file_name=file.filename,
+            file_type=file.content_type,
+            file_url="",
+        )
+        db.add(document)
+        db.commit()
+        db.refresh(document)
+
+        final_file_path = UPLOAD_DIR / f"{document.document_id}{file_extension}"
+        try:
+            temp_file_path.replace(final_file_path)
+        except Exception:
+            shutil.move(str(temp_file_path), str(final_file_path))
+
+        document.file_url = str(final_file_path)
+        document.processing_status = DocumentProcessingStatus.PROCESSING.value
+        db.commit()
+        db.refresh(document)
+
+        # Schedule downstream OCR & AI tasks with precomputed OCR result
+        background_tasks.add_task(
+            _run_ocr_and_store,
+            document_id=document.document_id,
+            file_path=final_file_path,
+            file_type=document.file_type,
+            precomputed_ocr_result=precomputed_ocr_result,
+        )
+        return document
+
+    # General upload workflow (no patient_id)
     # 3. Create database record
     document = Document(
-        patient_id=patient_id,
+        patient_id=None,
         uploaded_by=uploaded_by,
         file_name=file.filename,
         file_type=file.content_type,
@@ -128,7 +214,6 @@ def upload_document(
     db.refresh(document)
 
     # 4. Create file path using document ID
-    file_extension = Path(file.filename).suffix
     file_path = UPLOAD_DIR / f"{document.document_id}{file_extension}"
 
     # 5. Save uploaded file
@@ -162,6 +247,7 @@ def upload_document(
     )
 
     return document
+
 
 
 def _mark_document_failed(

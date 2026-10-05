@@ -14,6 +14,7 @@ import { listDocuments, uploadDocument, getDocumentStatus, getChunkSource } from
 import { searchPatientAI } from "../api/patients";
 import Toast from "../components/Toast";
 import CareTeamPanel from "../components/CareTeamPanel";
+import MarkdownRenderer from "../components/MarkdownRenderer";
 
 /* ─────────────────── helpers ─────────────────── */
 const POLL_INTERVAL_MS = 4000;
@@ -341,21 +342,23 @@ function AIMessage({ role, text, sources, onInspectSource }) {
         {role === "assistant" ? "AI" : "You"}
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p
+        <div
           style={{
             background:
               role === "assistant" ? "var(--hp-bg-200)" : "var(--hp-bg-300)",
             borderRadius: role === "assistant" ? "4px 12px 12px 12px" : "12px 4px 12px 12px",
             padding: "10px 14px",
-            margin: 0,
             fontSize: "0.875rem",
             lineHeight: 1.6,
             color: "var(--hp-text-100)",
-            whiteSpace: "pre-wrap",
           }}
         >
-          {text}
-        </p>
+          {role === "assistant" ? (
+            <MarkdownRenderer content={text} />
+          ) : (
+            <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{text}</p>
+          )}
+        </div>
         {sources && sources.length > 0 && (
           <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
             {sources.map((s, i) => {
@@ -419,6 +422,7 @@ export default function PatientWorkspacePage() {
   const [loadingPatient, setLoadingPatient] = useState(true);
   const [loadingDocs, setLoadingDocs] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState(null);
   const [toast, setToast] = useState(null);
 
   // AI state
@@ -503,12 +507,37 @@ export default function PatientWorkspacePage() {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setUploadError(null);
     try {
       await uploadDocument(file, patientId);
       setToast({ message: `"${file.name}" uploaded successfully.`, variant: "success" });
       fetchDocs();
     } catch (err) {
-      setToast({ message: err?.response?.data?.detail || "Upload failed.", variant: "error" });
+      const isMismatch = err?.code === "PATIENT_IDENTITY_MISMATCH";
+      const targetName = patient ? `${patient.first_name} ${patient.last_name}` : "this patient";
+      const detectedName = err?.detected_patient_name;
+
+      let displayMsg = err?.message || err?.response?.data?.detail || "Upload failed.";
+      if (isMismatch) {
+        if (detectedName) {
+          displayMsg = `This document appears to belong to ${detectedName}, but you are currently in ${targetName}'s patient workspace. Please verify the patient before uploading.`;
+        } else {
+          displayMsg = `This document appears to belong to another patient, but you are currently in ${targetName}'s patient workspace. Please verify the patient before uploading.`;
+        }
+      }
+
+      setUploadError({
+        code: err?.code || "UPLOAD_ERROR",
+        message: displayMsg,
+        detectedName,
+        targetName,
+        isMismatch,
+      });
+
+      setToast({
+        message: isMismatch ? "Identity Mismatch: Document not uploaded." : displayMsg,
+        variant: "error",
+      });
     } finally {
       setUploading(false);
       e.target.value = "";
@@ -670,6 +699,67 @@ export default function PatientWorkspacePage() {
 
       {/* ── Care Team Panel ── */}
       <CareTeamPanel patientId={patientId} />
+
+      {/* ── Patient Identity Mismatch / Upload Alert Banner ── */}
+      {uploadError && (
+        <div
+          role="alert"
+          className="hp-identity-mismatch-banner"
+          style={{
+            background: uploadError.isMismatch ? "#FFF5F5" : "var(--hp-bg-200)",
+            border: uploadError.isMismatch ? "1.5px solid #F87171" : "1px solid var(--hp-border-subtle)",
+            borderRadius: 10,
+            padding: "14px 18px",
+            marginBottom: 20,
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 14,
+            boxShadow: "0 2px 8px rgba(239, 68, 68, 0.08)",
+            animation: "hp-fade-in 0.25s ease",
+          }}
+        >
+          <div style={{ fontSize: "1.35rem", lineHeight: 1, marginTop: 1 }}>
+            ⚠️
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontWeight: 700,
+                fontSize: "0.9375rem",
+                color: uploadError.isMismatch ? "#991B1B" : "var(--hp-danger, #C92A2A)",
+                marginBottom: 4,
+              }}
+            >
+              {uploadError.isMismatch ? "Document not uploaded" : "Upload Failed"}
+            </div>
+            <div style={{ fontSize: "0.875rem", lineHeight: 1.5, color: "#1E293B" }}>
+              {uploadError.isMismatch && uploadError.detectedName ? (
+                <>
+                  This document appears to belong to <strong>{uploadError.detectedName}</strong>, but you are currently in <strong>{uploadError.targetName}</strong>'s patient workspace. Please verify the patient before uploading.
+                </>
+              ) : (
+                uploadError.message
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setUploadError(null)}
+            aria-label="Dismiss error"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              color: "#64748B",
+              fontSize: "1.1rem",
+              padding: "0 4px",
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── Split Panel ── */}
       <div

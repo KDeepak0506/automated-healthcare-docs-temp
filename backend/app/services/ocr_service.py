@@ -281,7 +281,7 @@ def _extract_native_pdf_text(file_path: Path, doc: fitz.Document) -> OCRResult:
     )
 
 
-def _extract_ocr_text_from_pdf(file_path: Path, doc: fitz.Document) -> OCRResult:
+def _extract_tesseract_from_pdf(file_path: Path, doc: fitz.Document) -> OCRResult:
     """Render PDF pages to images, preprocess, and execute Tesseract OCR."""
     start_time = time.perf_counter()
     page_texts: list[str] = []
@@ -334,7 +334,7 @@ def _extract_ocr_text_from_pdf(file_path: Path, doc: fitz.Document) -> OCRResult
     )
 
 
-def _extract_ocr_text_from_image(file_path: Path) -> OCRResult:
+def _extract_tesseract_from_image(file_path: Path) -> OCRResult:
     """Preprocess and run Tesseract OCR on a single image file."""
     start_time = time.perf_counter()
     image = cv2.imread(str(file_path))
@@ -364,10 +364,179 @@ def _extract_ocr_text_from_image(file_path: Path) -> OCRResult:
     )
 
 
+_PADDLE_OCR: Any | None = None
+OCR_ENGINE = os.getenv("OCR_ENGINE", "tesseract").strip().lower()
+PADDLEOCR_DEVICE = os.getenv("PADDLEOCR_DEVICE", "cpu").strip()
+
+
+def _get_paddle_ocr() -> Any:
+    """Load PaddleOCR lazily so the Tesseract baseline needs no new dependency."""
+    try:
+        from paddleocr import PaddleOCR
+    except ImportError as exc:
+        raise RuntimeError(
+            "PaddleOCR is not installed. Install backend/requirements-ocr-paddle.txt "
+            "and the appropriate PaddlePaddle runtime."
+        ) from exc
+
+    global _PADDLE_OCR
+    if _PADDLE_OCR is None:
+        logger.info("Loading PaddleOCR with device=%s", PADDLEOCR_DEVICE)
+        _PADDLE_OCR = PaddleOCR(
+            lang="en",
+            device=PADDLEOCR_DEVICE,
+            use_doc_orientation_classify=True,
+            use_doc_unwarping=False,
+            use_textline_orientation=True,
+        )
+    return _PADDLE_OCR
+
+
+def _paddle_result_dict(result: Any) -> dict[str, Any]:
+    """Normalize PaddleOCR result objects to a dictionary."""
+    if isinstance(result, dict):
+        return result
+
+    value = getattr(result, "json", None)
+    if callable(value):
+        value = value()
+    if isinstance(value, str):
+        import json
+        value = json.loads(value)
+
+    if isinstance(value, dict):
+        if len(value) == 1:
+            nested = next(iter(value.values()))
+            if isinstance(nested, dict) and (
+                "rec_texts" in nested or "rec_boxes" in nested
+            ):
+                return nested
+        return value
+
+    raise TypeError("Unsupported PaddleOCR result format")
+
+
+def _extract_paddle_page(
+    image: np.ndarray,
+    page_num: int,
+) -> tuple[str, float, list[dict[str, Any]]]:
+    """Run PaddleOCR and preserve recognized text, scores, and coordinates."""
+    results = list(_get_paddle_ocr().predict(image))
+    if not results:
+        return "", 0.0, []
+
+    result = _paddle_result_dict(results[0])
+    texts = result.get("rec_texts") or []
+    scores = result.get("rec_scores") or []
+    boxes = result.get("rec_boxes") or []
+
+    words: list[dict[str, Any]] = []
+    for i, value in enumerate(texts):
+        text = str(value).strip()
+        if not text:
+            continue
+
+        score = float(scores[i]) if i < len(scores) else 0.0
+        box = boxes[i] if i < len(boxes) else None
+        coords = np.asarray(box).reshape(-1).tolist() if box is not None else []
+
+        if len(coords) >= 4:
+            x1, y1, x2, y2 = map(float, coords[:4])
+        else:
+            x1 = y1 = x2 = y2 = 0.0
+
+        words.append({
+            "text": text,
+            "confidence": round(score, 4),
+            "page": page_num,
+            "left": x1,
+            "top": y1,
+            "right": x2,
+            "bottom": y2,
+        })
+
+    # Coordinate-aware reading order. Full table/column parsing is intentionally
+    # left for the later PP-Structure/layout step.
+    words.sort(key=lambda item: (item["top"], item["left"]))
+    text = "\n".join(item["text"] for item in words)
+    confidence = (
+        round(sum(item["confidence"] for item in words) / len(words), 4)
+        if words else 0.0
+    )
+    return text, confidence, words
+
+
+def _extract_paddle_from_pdf(doc: fitz.Document) -> OCRResult:
+    start_time = time.perf_counter()
+    page_texts: list[str] = []
+    page_confidences: list[dict[str, Any]] = []
+    all_word_confidences: list[dict[str, Any]] = []
+
+    for idx, page in enumerate(doc):
+        page_num = idx + 1
+        pix = page.get_pixmap(dpi=300)
+        arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+            (pix.height, pix.width, pix.n)
+        )
+
+        if pix.n == 4:
+            image = cv2.cvtColor(arr, cv2.COLOR_RGBA2RGB)
+        elif pix.n == 3:
+            image = arr
+        else:
+            image = cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
+
+        text, page_conf, word_confs = _extract_paddle_page(image, page_num)
+        page_texts.append(text)
+        page_confidences.append({"page": page_num, "confidence": page_conf})
+        all_word_confidences.extend(word_confs)
+
+    elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+    all_confs = [item["confidence"] for item in all_word_confidences]
+    confidence = round(sum(all_confs) / len(all_confs), 4) if all_confs else 0.0
+
+    return OCRResult(
+        raw_text="\n\n".join(text for text in page_texts if text),
+        page_count=len(doc),
+        confidence=confidence,
+        ocr_engine="paddleocr",
+        processing_time_ms=elapsed_ms,
+        layout={
+            "pages": len(doc),
+            "tables_detected": 0,
+            "page_confidences": page_confidences,
+            "word_confidences": all_word_confidences,
+        },
+    )
+
+
+def _extract_paddle_from_image(file_path: Path) -> OCRResult:
+    start_time = time.perf_counter()
+    image = cv2.imread(str(file_path))
+    if image is None:
+        image = np.asarray(Image.open(file_path).convert("RGB"))
+    else:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    text, confidence, word_confs = _extract_paddle_page(image, 1)
+    elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+
+    return OCRResult(
+        raw_text=text,
+        page_count=1,
+        confidence=confidence,
+        ocr_engine="paddleocr",
+        processing_time_ms=elapsed_ms,
+        layout={
+            "pages": 1,
+            "tables_detected": 0,
+            "page_confidences": [{"page": 1, "confidence": confidence}],
+            "word_confidences": word_confs,
+        },
+    )
+
 def extract_text(file_path: Path, file_type: str) -> OCRResult:
-    """Main entry point for document text extraction.
-    Routes native PDFs to PyMuPDF and images/scanned PDFs to Tesseract with preprocessing.
-    """
+    """Extract text using the configured OCR engine for scanned documents."""
     if not file_path.exists():
         raise FileNotFoundError(f"Document file not found at: {file_path}")
 
@@ -376,11 +545,27 @@ def extract_text(file_path: Path, file_type: str) -> OCRResult:
         try:
             if _is_native_pdf(doc):
                 return _extract_native_pdf_text(file_path, doc)
-            else:
-                return _extract_ocr_text_from_pdf(file_path, doc)
+
+            if OCR_ENGINE == "paddleocr":
+                try:
+                    return _extract_paddle_from_pdf(doc)
+                except Exception as exc:
+                    logger.warning("PaddleOCR failed; falling back to Tesseract: %s", exc)
+
+            return _extract_tesseract_from_pdf(file_path, doc)
         finally:
             doc.close()
-    elif file_type in ("image/jpeg", "image/png", "image/jpg") or file_path.suffix.lower() in (".jpg", ".jpeg", ".png"):
-        return _extract_ocr_text_from_image(file_path)
-    else:
-        raise ValueError(f"Unsupported file type for OCR: {file_type}")
+
+    if (
+        file_type in ("image/jpeg", "image/png", "image/jpg")
+        or file_path.suffix.lower() in (".jpg", ".jpeg", ".png")
+    ):
+        if OCR_ENGINE == "paddleocr":
+            try:
+                return _extract_paddle_from_image(file_path)
+            except Exception as exc:
+                logger.warning("PaddleOCR failed; falling back to Tesseract: %s", exc)
+
+        return _extract_tesseract_from_image(file_path)
+
+    raise ValueError(f"Unsupported file type for OCR: {file_type}")

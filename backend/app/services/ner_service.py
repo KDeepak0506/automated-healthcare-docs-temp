@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from typing import Any
 from uuid import UUID
@@ -90,8 +91,19 @@ class ClinicalNERService:
     STRICTLY consumes sanitized_text ONLY (never raw OCR / raw PHI).
     """
 
-    def __init__(self, model_name: str = "urchade/gliner_small-v2.1"):
-        self.model_name = model_name
+    def __init__(
+        self,
+        model_name: str | None = None,
+        device: str | None = None,
+    ):
+        # Keep the current GLiNER-small model as the default baseline.
+        # The focused NER experiment can select a biomedical model via
+        # GLINER_MODEL without changing application code.
+        self.model_name = model_name or os.getenv(
+            "GLINER_MODEL",
+            "urchade/gliner_small-v2.1",
+        )
+        self.device = device or os.getenv("GLINER_DEVICE", "auto").strip().lower()
         self._model = None
         self._model_loaded = False
 
@@ -100,9 +112,29 @@ class ClinicalNERService:
             self._model_loaded = True
             try:
                 from gliner import GLiNER
-                logger.info(f"Loading GLiNER model: {self.model_name}")
+                logger.info(
+                    "Loading GLiNER model=%s device=%s",
+                    self.model_name,
+                    self.device,
+                )
                 self._model = GLiNER.from_pretrained(self.model_name)
-                logger.info("GLiNER model loaded successfully")
+
+                if self.device == "auto":
+                    try:
+                        import torch
+                        target_device = "cuda" if torch.cuda.is_available() else "cpu"
+                    except Exception:
+                        target_device = "cpu"
+                else:
+                    target_device = self.device
+
+                if hasattr(self._model, "to"):
+                    self._model = self._model.to(target_device)
+
+                logger.info(
+                    "GLiNER model loaded successfully on device=%s",
+                    target_device,
+                )
             except Exception as e:
                 logger.warning(
                     f"Failed to load GLiNER model {self.model_name}: {e}. "

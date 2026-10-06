@@ -1,0 +1,3 @@
+# Optional dependency for the focused OCR experiment.
+# Install the appropriate PaddlePaddle CPU/GPU runtime for the local platform first.
+paddleocr>=3.3.0

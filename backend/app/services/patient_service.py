@@ -19,7 +19,7 @@ def has_patient_access(db: Session, user: User, patient_id: UUID) -> bool:
     User is authorized if:
     1. User is Admin or Records Staff (system-wide clinical staff)
     2. An assignment exists in user_patient_assignments mapping user to patient
-    3. User uploaded at least one document assigned to patient_id
+    3. User uploaded at least one document assigned to patient_id (except for nurses)
     """
     if user.role in (UserRole.ADMIN.value, UserRole.RECORDS_STAFF.value):
         return True
@@ -34,6 +34,10 @@ def has_patient_access(db: Session, user: User, patient_id: UUID) -> bool:
     )
     if assignment is not None:
         return True
+
+    # For role "nurse", access must come only from the assignment table, not from uploader clause
+    if user.role == UserRole.NURSE.value:
+        return False
 
     uploader_doc = (
         db.query(Document)
@@ -50,14 +54,20 @@ def has_document_access(db: Session, user: User, document: Document) -> bool:
     """
     Check access permission for a document.
     User is authorized if:
-    1. User is document uploader
-    2. User is Admin
-    3. Document belongs to a patient and user has patient access
+    1. User is Admin
+    2. For role nurse: if document belongs to a patient, requires patient access (assignment).
+       Uploader shortcut is only retained for documents with no patient_id.
+    3. For other roles: User is document uploader or has patient access.
     """
-    if document.uploaded_by == user.user_id:
+    if user.role == UserRole.ADMIN.value:
         return True
 
-    if user.role == UserRole.ADMIN.value:
+    if user.role == UserRole.NURSE.value:
+        if document.patient_id is not None:
+            return has_patient_access(db, user, document.patient_id)
+        return document.uploaded_by == user.user_id
+
+    if document.uploaded_by == user.user_id:
         return True
 
     if document.patient_id is not None:
@@ -121,6 +131,12 @@ def update_patient(
     patient_in: PatientUpdate,
     user: User,
 ) -> Patient:
+    if user.role == UserRole.NURSE.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Nurses are not authorized to update patient records",
+        )
+
     patient = verify_patient_access(db, user, patient_id)
 
     if patient_in.first_name is not None:
@@ -186,6 +202,57 @@ def assign_patient_to_user(
     return assignment
 
 
+def unassign_patient_from_user(
+    db: Session,
+    patient_id: UUID,
+    target_user_id: UUID,
+    assigner: User,
+) -> None:
+    """Unassign a user from a patient. Restricted to Admin or Records Staff."""
+    if assigner.role not in (UserRole.ADMIN.value, UserRole.RECORDS_STAFF.value):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Admin or Records Staff can unassign patient access",
+        )
+
+    assignment = (
+        db.query(PatientAssignment)
+        .filter(
+            PatientAssignment.patient_id == patient_id,
+            PatientAssignment.user_id == target_user_id,
+        )
+        .first()
+    )
+    if not assignment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assignment not found",
+        )
+
+    db.delete(assignment)
+    db.commit()
+
+
+def list_patient_assignments(
+    db: Session,
+    patient_id: UUID,
+) -> list[PatientAssignment]:
+    """List all user assignments for a given patient."""
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Patient not found",
+        )
+
+    return (
+        db.query(PatientAssignment)
+        .filter(PatientAssignment.patient_id == patient_id)
+        .order_by(PatientAssignment.assigned_at.desc())
+        .all()
+    )
+
+
 def list_accessible_patients(
     db: Session,
     user: User,
@@ -197,25 +264,27 @@ def list_accessible_patients(
     query = db.query(Patient)
 
     if user.role not in (UserRole.ADMIN.value, UserRole.RECORDS_STAFF.value):
-        # Filter patients assigned to user or containing user's uploaded documents
+        # Filter patients assigned to user or containing user's uploaded documents (for non-nurses)
         assigned_patient_ids = (
             db.query(PatientAssignment.patient_id)
             .filter(PatientAssignment.user_id == user.user_id)
             .scalar_subquery()
         )
-        uploader_patient_ids = (
-            db.query(Document.patient_id)
-            .filter(
-                Document.uploaded_by == user.user_id,
-                Document.patient_id.isnot(None),
+        if user.role == UserRole.NURSE.value:
+            query = query.filter(Patient.patient_id.in_(assigned_patient_ids))
+        else:
+            uploader_patient_ids = (
+                db.query(Document.patient_id)
+                .filter(
+                    Document.uploaded_by == user.user_id,
+                    Document.patient_id.isnot(None),
+                )
+                .scalar_subquery()
             )
-            .scalar_subquery()
-        )
-
-        query = query.filter(
-            (Patient.patient_id.in_(assigned_patient_ids))
-            | (Patient.patient_id.in_(uploader_patient_ids))
-        )
+            query = query.filter(
+                (Patient.patient_id.in_(assigned_patient_ids))
+                | (Patient.patient_id.in_(uploader_patient_ids))
+            )
 
     if search:
         search_term = f"%{search.strip()}%"

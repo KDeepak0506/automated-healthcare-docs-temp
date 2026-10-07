@@ -3,9 +3,10 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status as http_status
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_roles
 from app.db.session import get_db
 from app.models.user import User
+from app.schemas.user import UserRole
 from app.schemas.classification import ClassificationResponse
 from app.schemas.document import (
     DocumentProcessingStatus,
@@ -117,6 +118,7 @@ def get_document_by_id_endpoint(
 @router.patch(
     "/{document_id}/status",
     response_model=DocumentResponse,
+    dependencies=[Depends(require_roles(UserRole.ADMIN.value, UserRole.RECORDS_STAFF.value, UserRole.DOCTOR.value))],
 )
 def update_document_processing_status(
     document_id: UUID,

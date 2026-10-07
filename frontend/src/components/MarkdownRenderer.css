@@ -1,0 +1,153 @@
+/* ── Clinical Markdown Content Styles ── */
+.hp-markdown-container {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: inherit;
+  word-break: break-word;
+}
+
+.hp-markdown-container > *:first-child {
+  margin-top: 0 !important;
+}
+
+.hp-markdown-container > *:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* Headings */
+.hp-md-heading {
+  font-family: inherit;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--hp-text-900, #1a1d21);
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.01em;
+}
+
+.hp-md-h1 {
+  font-size: 1.25rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--hp-border, #e1e4e8);
+}
+
+.hp-md-h2 {
+  font-size: 1.125rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--hp-border-100, #e1e4e8)44;
+}
+
+.hp-md-h3 {
+  font-size: 1rem;
+  color: var(--hp-primary-600, #0a5c5f);
+  margin-top: 1rem;
+  margin-bottom: 0.35rem;
+}
+
+.hp-md-h4 {
+  font-size: 0.9125rem;
+  color: var(--hp-text-700, #343a40);
+  font-weight: 650;
+  margin-top: 0.85rem;
+  margin-bottom: 0.25rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hp-md-h5,
+.hp-md-h6 {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--hp-text-700, #343a40);
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+}
+
+/* Paragraphs */
+.hp-md-paragraph {
+  margin-top: 0;
+  margin-bottom: 0.65rem;
+  line-height: 1.6;
+}
+
+/* Lists */
+.hp-md-list {
+  margin-top: 0.25rem;
+  margin-bottom: 0.75rem;
+  padding-left: 1.35rem;
+}
+
+.hp-md-ul {
+  list-style-type: disc;
+}
+
+.hp-md-ol {
+  list-style-type: decimal;
+}
+
+.hp-md-list-item {
+  margin-top: 0.25rem;
+  margin-bottom: 0.25rem;
+  line-height: 1.55;
+  padding-left: 0.2rem;
+}
+
+.hp-md-list-item::marker {
+  color: var(--hp-primary, #0d7377);
+}
+
+/* Emphasis & Bold */
+.hp-md-strong {
+  font-weight: 650;
+  color: var(--hp-text-900, #1a1d21);
+}
+
+.hp-md-em {
+  font-style: italic;
+}
+
+/* Code & Pre */
+.hp-md-inline-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8125rem;
+  background-color: rgba(0, 0, 0, 0.06);
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  color: var(--hp-primary-700, #083f42);
+}
+
+.hp-md-pre {
+  background: var(--hp-surface-2, #f1f3f5);
+  border: 1px solid var(--hp-border, #e1e4e8);
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+
+.hp-md-code-block {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  background: none;
+  padding: 0;
+}
+
+/* Blockquote */
+.hp-md-blockquote {
+  margin: 0.75rem 0;
+  padding: 0.5rem 1rem;
+  border-left: 3px solid var(--hp-primary, #0d7377);
+  background: var(--hp-primary-50, #f0f9f9);
+  border-radius: 0 6px 6px 0;
+  color: var(--hp-text-700, #343a40);
+  font-style: normal;
+}
+
+/* Divider */
+.hp-md-divider {
+  border: none;
+  border-top: 1px solid var(--hp-border, #e1e4e8);
+  margin: 1rem 0;
+}

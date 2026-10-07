@@ -102,3 +102,15 @@ class PatientAssignment(Base):
         "Patient",
         back_populates="assignments",
     )
+
+    @property
+    def name(self) -> str | None:
+        return self.user.name if self.user else None
+
+    @property
+    def email(self) -> str | None:
+        return self.user.email if self.user else None
+
+    @property
+    def role(self) -> str | None:
+        return self.user.role if self.user else None

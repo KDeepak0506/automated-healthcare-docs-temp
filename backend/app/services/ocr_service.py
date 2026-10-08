@@ -426,9 +426,16 @@ def _extract_paddle_page(
         return "", 0.0, []
 
     result = _paddle_result_dict(results[0])
-    texts = result.get("rec_texts") or []
-    scores = result.get("rec_scores") or []
-    boxes = result.get("rec_boxes") or []
+    # PaddleOCR 3.7 returns some fields (notably rec_boxes/rec_scores)
+    # as NumPy arrays. Do not use 'or []' on arrays because NumPy does
+    # not allow multi-element arrays to be evaluated as a boolean.
+    texts = result.get("rec_texts")
+    scores = result.get("rec_scores")
+    boxes = result.get("rec_boxes")
+
+    texts = [] if texts is None else texts
+    scores = [] if scores is None else scores
+    boxes = [] if boxes is None else boxes
 
     words: list[dict[str, Any]] = []
     for i, value in enumerate(texts):

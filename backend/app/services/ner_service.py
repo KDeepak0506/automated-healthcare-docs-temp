@@ -90,7 +90,7 @@ class ClinicalNERService:
     STRICTLY consumes sanitized_text ONLY (never raw OCR / raw PHI).
     """
 
-    def __init__(self, model_name: str = "urchade/gliner_small-v2.1"):
+    def __init__(self, model_name: str = "Ihor/gliner-biomed-large-v1.0"):
         self.model_name = model_name
         self._model = None
         self._model_loaded = False
